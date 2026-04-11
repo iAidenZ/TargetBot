@@ -650,7 +650,7 @@ OWNER_ID = 756539405463978024
 entity_cooldown = {}
 
 @bot.command()
-async def entity(ctx, member: discord.Member = None):
+async def virus(ctx, member: discord.Member = None):
     if ctx.author.id != OWNER_ID:
         last_used = entity_cooldown.get(ctx.author.id)
         if last_used:
