@@ -532,5 +532,208 @@ async def jerk(ctx):
     await tap_tap(ctx, user)
 
 
+    # ============ EXPOSE ============
+expose_evidence = [
+    "Was googling 'how to be cool' at 2AM 🔍",
+    "Cried during a kids movie 😭",
+    "Has 847 unsent messages to their crush 💌",
+    "Talked to themselves in the mirror for 20 minutes 🪞",
+    "Their search history is actually criminal 🤭",
+    "Practiced a handshake alone for 30 minutes 🤝",
+    "Laughed at their own joke before finishing it 💀",
+    "Fell asleep on the keyboard and sent gibberish to their crush ⌨️",
+    "Has a folder named 'definitely not important' on their desktop 📁",
+    "Googled their own name 3 times this week 🕵️",
+    "Rehearsed an argument in the shower and lost 🚿",
+    "Liked a 3 year old photo while stalking someone's profile 📸",
+    "Set 7 alarms and ignored all of them ⏰",
+    "Replied 'you too' when the waiter said enjoy your meal 🍽️",
+    "Waved back at someone who wasn't waving at them 👋",
+    "Spent 45 mins choosing what to watch then gave up 📺",
+    "Sent a voice message then immediately regretted it 🎤",
+    "Typed a paragraph then deleted it and said 'lol' 📱",
+    "Has been 'about to sleep' for 3 hours 😴",
+    "Googled a word they already knew just to make sure 📖",
+]
+
+class ExposeView(discord.ui.View):
+    def __init__(self, requester, accomplice, victim, channel):
+        super().__init__(timeout=60)
+        self.requester = requester
+        self.accomplice = accomplice
+        self.victim = victim
+        self.channel = channel
+        self.answered = False
+
+    async def on_timeout(self):
+        if self.answered:
+            return
+        embed = discord.Embed(
+            title="💨 Operation Failed",
+            description=f"{self.accomplice.mention} chickened out... the mission is off 💀",
+            color=discord.Color.dark_gray()
+        )
+        await self.channel.send(embed=embed)
+
+    @discord.ui.button(label='Accept 🤝', style=discord.ButtonStyle.success)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.accomplice:
+            await interaction.response.send_message("This isn't your request!", ephemeral=True)
+            return
+        self.answered = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+        evidence = random.sample(expose_evidence, 5)
+
+        await self.channel.send(f'{self.victim.mention}')
+
+        embed = discord.Embed(
+            title="🔍 OFFICIAL EXPOSURE REPORT",
+            color=discord.Color.dark_red()
+        )
+        embed.add_field(name="📋 Subject", value=self.victim.mention, inline=True)
+        embed.add_field(name="🕵️ Filed by", value=f"{self.requester.mention} & {self.accomplice.mention}", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=False)
+
+        for i, ev in enumerate(evidence, 1):
+            embed.add_field(name=f"📌 Exhibit {chr(64+i)}", value=ev, inline=False)
+
+        embed.add_field(name="⚖️ Verdict", value="**Fully Exposed. No recovery possible. 💀**", inline=False)
+        embed.set_thumbnail(url=self.victim.display_avatar.url)
+        embed.set_footer(text="This report has been filed with the server authorities 🔏")
+        await self.channel.send(embed=embed)
+
+    @discord.ui.button(label='Decline ❌', style=discord.ButtonStyle.danger)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.accomplice:
+            await interaction.response.send_message("This isn't your request!", ephemeral=True)
+            return
+        self.answered = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        embed = discord.Embed(
+            title="💨 Operation Cancelled",
+            description=f"{self.accomplice.mention} backed out like a coward 💀",
+            color=discord.Color.dark_gray()
+        )
+        await self.channel.send(embed=embed)
+
+@bot.command()
+async def expose(ctx, accomplice: discord.Member = None, victim: discord.Member = None):
+    if accomplice is None or victim is None:
+        await ctx.send("Usage: `!expose @accomplice @victim`")
+        return
+    if accomplice == ctx.author:
+        await ctx.send("You can't be your own accomplice 💀")
+        return
+    if victim == ctx.author or victim == accomplice:
+        await ctx.send("Nice try 💀")
+        return
+
+    await ctx.send(f'{accomplice.mention}')
+
+    embed = discord.Embed(
+        title="🕵️ Exposure Request",
+        description=f"{ctx.author.mention} wants you to help expose {victim.mention}!\n\nAre you in? 👀",
+        color=discord.Color.dark_red()
+    )
+    embed.set_footer(text="You have 60 seconds to decide!")
+    view = ExposeView(ctx.author, accomplice, victim, ctx.channel)
+    await ctx.send(embed=embed, view=view)
+
+
+    # ============ ENTITY ============
+@bot.command()
+async def virus(ctx, member: discord.Member = None):
+    members = [m for m in ctx.guild.members if not m.bot]
+    person = member if member else random.choice(members)
+
+    await ctx.send(f'{person.mention}')
+
+    scanning_embed = discord.Embed(
+        title="⚠️ ANOMALY DETECTED",
+        description="Scanning server for supernatural activity...",
+        color=discord.Color.dark_gray()
+    )
+    msg = await ctx.send(embed=scanning_embed)
+    await asyncio.sleep(3)
+
+    scan2 = discord.Embed(
+        title="🔴 SIGNAL LOCKED",
+        description=f"Entity has attached itself to **{person.display_name}**\n\nInitiating deep scan...",
+        color=discord.Color.from_rgb(30, 0, 0)
+    )
+    scan2.set_thumbnail(url=person.display_avatar.url)
+    await msg.edit(embed=scan2)
+    await asyncio.sleep(3)
+
+    messages = [
+        (
+            "📡 SCAN LAYER 1 — SURFACE",
+            f"Username: **{person.display_name}**\nAccount Created: **{person.created_at.strftime('%B %d, %Y')}**\nJoined Server: **{person.joined_at.strftime('%B %d, %Y') if person.joined_at else 'Unknown'}**\n\n*Normal so far... digging deeper.*",
+            discord.Color.from_rgb(20, 0, 0)
+        ),
+        (
+            "📡 SCAN LAYER 2 — BEHAVIORAL",
+            f"Times online past midnight: **{random.randint(47, 312)}**\nMessages deleted before sending: **{random.randint(200, 999)}**\nTimes opened Discord and closed it immediately: **{random.randint(50, 400)}**\n\n*Unusual patterns detected...*",
+            discord.Color.from_rgb(30, 0, 0)
+        ),
+        (
+            "📡 SCAN LAYER 3 — PSYCHOLOGICAL",
+            f"Deepest fear detected: **Being forgotten** 🕯️\nRecurring thought at 3AM: **'{random.choice(['am i real', 'do they actually like me', 'something is watching me', 'why is it so quiet', 'i shouldnt be awake right now'])}**'\nLast nightmare was about: **{random.choice(['an empty room with one door that wouldnt open', 'everyone leaving at once', 'a figure standing at the foot of the bed', 'running but never moving'])}**\n\n*We are getting close to it...*",
+            discord.Color.from_rgb(40, 0, 0)
+        ),
+        (
+            "⚠️ SCAN LAYER 4 — ENTITY CONTACT",
+            f"The entity has been with **{person.display_name}** since **{random.randint(1, 6)} years ago**\n\nIt watches when the room is dark.\nIt listens when you talk to yourself.\nIt was here before you joined this server.\n\n*It knows you noticed it.*",
+            discord.Color.from_rgb(50, 0, 0)
+        ),
+        (
+            "🔴 SCAN LAYER 5 — FINAL",
+            f"Entity classification: **UNKNOWN**\nThreat level: **DO NOT ENGAGE**\nCurrent location: **Same room as {person.display_name}**\n\n*Turn around.*",
+            discord.Color.from_rgb(60, 0, 0)
+        ),
+    ]
+
+    for title, text, color in messages:
+        embed = discord.Embed(title=title, description=text, color=color)
+        embed.set_thumbnail(url=person.display_avatar.url)
+        await asyncio.sleep(3)
+        await ctx.send(embed=embed)
+
+    await asyncio.sleep(3)
+
+    final = discord.Embed(
+        title="👁️ IT KNOWS YOU ARE READING THIS",
+        description=(
+            f"*{person.mention}.*\n\n"
+            f"*It has been watching you for a long time.*\n\n"
+            f"*The scan is over.*\n\n"
+            f"*But it is not.*\n\n"
+            f"**Don't look behind you.**"
+        ),
+        color=discord.Color.from_rgb(5, 0, 0)
+    )
+    final.set_image(url=person.display_avatar.url)
+    final.set_footer(text="scan terminated. connection lost. 📡")
+    await ctx.send(embed=final)
+
+    await asyncio.sleep(10)
+
+    try:
+        await person.send(
+            embed=discord.Embed(
+                title="👁️",
+                description="*We told you it wasn't over.*\n\n*Did you really think closing the app would help?*\n\n**It followed you here.**",
+                color=discord.Color.from_rgb(5, 0, 0)
+            )
+        )
+    except:
+        pass
+
+
 import os
 bot.run(os.environ.get('TOKEN'))
