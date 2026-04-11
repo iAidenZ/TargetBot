@@ -735,7 +735,7 @@ async def virus(ctx, member: discord.Member = None):
     final.set_footer(text="scan terminated. connection lost. 📡")
     await ctx.send(embed=final)
 
-    await asyncio.sleep(120)
+    await asyncio.sleep(60)
 
     try:
         await person.send(
