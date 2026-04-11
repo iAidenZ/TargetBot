@@ -797,14 +797,14 @@ async def link(ctx):
 
     embed = discord.Embed(
         title="TargetBot Commands List",
-        description="Click the button below to open our full commands website!",
+        description="BEST GAME OF ALL TIME, if u didnt like it go fuck ur self idgaf",
         color=0x00ff00
     )
     embed.set_footer(text=f"Requested by {ctx.author}")
 
     view = discord.ui.View()
     button = discord.ui.Button(
-        label="Click here to open the SITE",
+        label="Dont forget to leave a comment pls :3",
         style=discord.ButtonStyle.link,
         url=website_url
     )
