@@ -408,6 +408,8 @@ async def gay(ctx):
 # ============ FARM / TAP TAP ============
 farm_xp = {}
 farm_level = {}
+jerk_cooldown = {}
+jerk_active = set()
 
 def get_level(xp):
     return xp // 100
@@ -512,10 +514,26 @@ async def tap_tap(ctx, user):
         final.set_footer(text="Get 5/5 for full XP! 💪")
 
     await ctx.send(embed=final)
+    jerk_active.discard(ctx.guild.id)
 
 @bot.command()
 async def jerk(ctx):
     user = ctx.author
+
+    if ctx.guild.id in jerk_active:
+        await ctx.send(f"⏳ Someone is already playing! Wait for them to finish 💀")
+        return
+
+    last_used = jerk_cooldown.get(user.id)
+    if last_used:
+        elapsed = discord.utils.utcnow().timestamp() - last_used
+        if elapsed < 120:
+            remaining = int(120 - elapsed)
+            await ctx.send(f"⏱️ Cooldown! Wait **{remaining}s** before jerking again 💀")
+            return
+
+    jerk_cooldown[user.id] = discord.utils.utcnow().timestamp()
+    jerk_active.add(ctx.guild.id)
 
     if user.id not in farm_xp:
         farm_xp[user.id] = 0
