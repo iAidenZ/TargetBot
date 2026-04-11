@@ -645,12 +645,12 @@ async def expose(ctx, accomplice: discord.Member = None, victim: discord.Member 
     await ctx.send(embed=embed, view=view)
 
 
-# ============ VIRUS ============
+# ============ ENTITY ============
 OWNER_ID = 756539405463978024
 entity_cooldown = {}
 
 @bot.command()
-async def virus(ctx, member: discord.Member = None):
+async def entity(ctx, member: discord.Member = None):
     if ctx.author.id != OWNER_ID:
         last_used = entity_cooldown.get(ctx.author.id)
         if last_used:
@@ -747,6 +747,23 @@ async def virus(ctx, member: discord.Member = None):
         )
     except:
         pass
+
+
+    # ============ PING SPAM ============
+@bot.command()
+async def ping(ctx, member: discord.Member = None, times: int = 3):
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("You don't have permission to use this command 💀")
+        return
+    if member is None:
+        await ctx.send("Tag someone! `!ping @user 6`")
+        return
+    if times > 20:
+        await ctx.send("Max is 20 💀")
+        return
+
+    for _ in range(times):
+        await ctx.send(member.mention)
 
 
 import os
