@@ -764,6 +764,7 @@ async def ping(ctx, member: discord.Member = None, times: int = 3):
 
     for _ in range(times):
         await ctx.send(member.mention)
+        await asyncio.sleep(0)
 
 
 import os
