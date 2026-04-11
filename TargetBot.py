@@ -650,7 +650,7 @@ OWNER_ID = 756539405463978024
 entity_cooldown = {}
 
 @bot.command()
-async def virus(ctx, member: discord.Member = None):
+async def entity(ctx, member: discord.Member = None):
     if ctx.author.id != OWNER_ID:
         last_used = entity_cooldown.get(ctx.author.id)
         if last_used:
@@ -735,7 +735,12 @@ async def virus(ctx, member: discord.Member = None):
     final.set_footer(text="scan terminated. connection lost. 📡")
     await ctx.send(embed=final)
 
-    await asyncio.sleep(60)
+    await asyncio.sleep(120)
+
+    scary_images = [
+        "https://static.wikia.nocookie.net/villains/images/d/dc/Go_to_Sleep.png/revision/latest?cb=20241023095623",
+        "https://media1.tenor.com/m/ninvfnBO1D4AAAAd/monster-scared.gif",
+    ]
 
     try:
         await person.send(
@@ -743,7 +748,7 @@ async def virus(ctx, member: discord.Member = None):
                 title="👁️",
                 description="*We told you it wasn't over Dumbass nga.*\n\n*Did you really think ignoring would help?*\n\n**I always comeback.**",
                 color=discord.Color.from_rgb(5, 0, 0)
-            ).set_image(url="https://static.wikia.nocookie.net/villains/images/d/dc/Go_to_Sleep.png/revision/latest?cb=20241023095623")
+            ).set_image(url=random.choice(scary_images))
         )
     except:
         pass
