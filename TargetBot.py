@@ -772,5 +772,48 @@ async def ping(ctx, member: discord.Member = None, times: int = 3):
         await asyncio.sleep(0)
 
 
+# =============== LINK ==================
+
+import discord
+from discord.ext import commands
+
+class Links(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.command(name="link")
+    async def link(self, ctx):
+        # Replace this with your actual website
+        website_url = "https://youtu.be/zOj4EUwqmbM?si=c5t9q7tzfC1R0RGi"   # ← CHANGE THIS
+
+        embed = discord.Embed(
+            title="TargetBot Commands",
+            description="Click the button below to open our full commands list website!",
+            color=0x00ff00  # You can change the color
+        )
+        embed.set_footer(text=f"Requested by {ctx.author}")
+
+        # Create the button
+        view = discord.ui.View()
+        button = discord.ui.Button(
+            label="Click here to open the SITE",
+            style=discord.ButtonStyle.link,
+            url=website_url
+        )
+        view.add_item(button)
+
+        # Try to send in DM first
+        try:
+            await ctx.author.send(embed=embed, view=view)
+            await ctx.send("✅ I sent you the link in DM!", delete_after=10)
+        except discord.Forbidden:
+            # If user has DMs closed, send normally
+            await ctx.send(embed=embed, view=view)
+
+async def setup(bot):
+    await bot.add_cog(Links(bot))
+
+
+
 import os
 bot.run(os.environ.get('TOKEN'))
