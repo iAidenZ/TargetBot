@@ -645,9 +645,23 @@ async def expose(ctx, accomplice: discord.Member = None, victim: discord.Member 
     await ctx.send(embed=embed, view=view)
 
 
-    # ============ ENTITY ============
+# ============ ENTITY ============
+OWNER_ID = 756539405463978024
+entity_cooldown = {}
+
 @bot.command()
-async def virus(ctx, member: discord.Member = None):
+async def entity(ctx, member: discord.Member = None):
+    if ctx.author.id != OWNER_ID:
+        last_used = entity_cooldown.get(ctx.author.id)
+        if last_used:
+            elapsed = discord.utils.utcnow().timestamp() - last_used
+            if elapsed < 600:
+                remaining = int(600 - elapsed)
+                await ctx.send(f"⏱️ Cooldown! Wait **{remaining}s** before using this again.")
+                return
+
+    entity_cooldown[ctx.author.id] = discord.utils.utcnow().timestamp()
+
     members = [m for m in ctx.guild.members if not m.bot]
     person = member if member else random.choice(members)
 
@@ -721,13 +735,13 @@ async def virus(ctx, member: discord.Member = None):
     final.set_footer(text="scan terminated. connection lost. 📡")
     await ctx.send(embed=final)
 
-    await asyncio.sleep(10)
+    await asyncio.sleep(120)
 
     try:
         await person.send(
             embed=discord.Embed(
                 title="👁️",
-                description="*We told you it wasn't over.*\n\n*Did you really think closing the app would help?*\n\n**It followed you here.**",
+                description="*We told you it wasn't over Dumbass nga.*\n\n*Did you really think ignoring would help?*\n\n**I always comeback.**",
                 color=discord.Color.from_rgb(5, 0, 0)
             )
         )
