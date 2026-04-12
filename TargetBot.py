@@ -1676,6 +1676,7 @@ async def leaderboard(ctx):
 
     embed.description = desc
     embed.set_footer(text="based on wallet balance 💰")
+    
 
     await ctx.send(embed=embed)
 
