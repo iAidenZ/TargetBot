@@ -772,7 +772,7 @@ async def entity(ctx, member: discord.Member = None):
         pass
 
 
-    # ============ PING SPAM ============
+# ============ PING SPAM ============
 @bot.command()
 async def ping(ctx, member: discord.Member = None, times: int = 3):
     if ctx.author.id != OWNER_ID:
@@ -785,9 +785,17 @@ async def ping(ctx, member: discord.Member = None, times: int = 3):
         await ctx.send("Max is 20 💀")
         return
 
+    await ctx.message.delete()
+
+    messages = []
     for _ in range(times):
-        await ctx.send(member.mention)
+        msg = await ctx.send(member.mention)
+        messages.append(msg)
         await asyncio.sleep(0)
+
+    await asyncio.sleep(1)
+    for msg in messages:
+        await msg.delete()
 
 
 # ================== LINK COMMAND ==================
