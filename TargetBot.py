@@ -793,7 +793,7 @@ async def ping(ctx, member: discord.Member = None, times: int = 3):
 # ================== LINK COMMAND ==================
 @bot.command(name="link")
 async def link(ctx):
-    website_url = "hhttps://iaidenz.pythonanywhere.com/track"   # Your site
+    website_url = "https://iaidenz.pythonanywhere.com/track "   # Your site
 
     embed = discord.Embed(
         title="TargetBot Commands List",
