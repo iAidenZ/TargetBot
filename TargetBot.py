@@ -964,6 +964,7 @@ class BlackjackGame:
         self.hands = [BlackjackHand([self.deck.pop(), self.deck.pop()], bet)]
         self.active_hand = 0
         self.finished = False
+        self.original_bet = bet
 
     def current_hand(self):
         if self.finished or self.active_hand >= len(self.hands):
@@ -1038,7 +1039,6 @@ class BlackjackGame:
         hand = self.current_hand()
         if not self.can_double(hand):
             return False
-
         wallet[self.user.id] -= hand.bet
         hand.bet *= 2
         hand.acted = True
@@ -1052,45 +1052,33 @@ class BlackjackGame:
         hand = self.current_hand()
         if not self.can_split(hand):
             return False
-
         wallet[self.user.id] -= hand.bet
-
         card1 = hand.cards[0]
         card2 = hand.cards[1]
-
         first_hand = BlackjackHand([card1, self.deck.pop()], hand.bet, from_split=True)
         second_hand = BlackjackHand([card2, self.deck.pop()], hand.bet, from_split=True)
-
         self.hands[self.active_hand] = first_hand
         self.hands.insert(self.active_hand + 1, second_hand)
         save_data()
-
         if bj_hand_value(first_hand.cards) == 21:
             first_hand.finished = True
-
         self.finish_if_done()
         return True
 
     def resolve_game(self):
         if self.finished:
             return
-
         self.finished = True
-
         if any(bj_hand_value(hand.cards) <= 21 for hand in self.hands):
             while bj_hand_value(self.dealer_hand) < 17:
                 self.dealer_hand.append(self.deck.pop())
-
         dealer_total = bj_hand_value(self.dealer_hand)
         dealer_blackjack = bj_is_blackjack(self.dealer_hand)
-
         for index, hand in enumerate(self.hands, start=1):
             total = bj_hand_value(hand.cards)
-
             if total > 21:
                 hand.outcome = f"Hand {index}: Bust. Lost **{hand.bet}**"
                 continue
-
             if bj_is_blackjack(hand.cards) and not hand.from_split and not dealer_blackjack:
                 payout = hand.bet + (hand.bet * 3) // 2
                 wallet[self.user.id] += payout
@@ -1106,13 +1094,11 @@ class BlackjackGame:
                 hand.outcome = f"Hand {index}: Push. Bet returned: **{hand.bet}**"
             else:
                 hand.outcome = f"Hand {index}: Lost **{hand.bet}**"
-
         save_data()
         blackjack_games.pop(self.user.id, None)
 
     def build_embed(self, reveal=False):
         embed = discord.Embed(title="🃏 Blackjack", color=discord.Color.blurple())
-
         if reveal or self.finished:
             dealer_text = bj_card_text(self.dealer_hand)
             dealer_total = bj_hand_value(self.dealer_hand)
@@ -1124,7 +1110,6 @@ class BlackjackGame:
                 value=dealer_text,
                 inline=False
             )
-
         for i, hand in enumerate(self.hands, start=1):
             total = bj_hand_value(hand.cards)
             marker = " <-- active" if not self.finished and (i - 1) == self.active_hand else ""
@@ -1134,9 +1119,70 @@ class BlackjackGame:
                 value=f"{bj_card_text(hand.cards)}\nBet: **{hand.bet}**{result_text}",
                 inline=False
             )
-
         embed.set_footer(text=f"Balance: {get_wallet(self.user.id)} coins")
         return embed
+
+
+async def start_blackjack_game(user, channel, bet):
+    if user.id in blackjack_games:
+        await channel.send("you already got a blackjack game running")
+        return
+    if get_wallet(user.id) < bet:
+        await channel.send(f"ur broke, u got **{get_wallet(user.id)}** coins")
+        return
+    wallet[user.id] -= bet
+    save_data()
+    game = BlackjackGame(user, channel, bet)
+    blackjack_games[user.id] = game
+    if game.check_starting_blackjack():
+        view = PlayAgainView(user, channel, bet)
+        await channel.send(f"{user.mention}", embed=game.build_embed(reveal=True), view=view)
+        return
+    view = BlackjackView(game)
+    msg = await channel.send(f"{user.mention}", embed=game.build_embed(), view=view)
+    view.message = msg
+
+
+class PlayAgainView(discord.ui.View):
+    def __init__(self, user, channel, last_bet):
+        super().__init__(timeout=60)
+        self.user = user
+        self.channel = channel
+        self.last_bet = last_bet
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("not ur game lol", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Play Again (Same Bet)", style=discord.ButtonStyle.success, custom_id="bj_replay_same")
+    async def replay_same(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        await start_blackjack_game(self.user, self.channel, self.last_bet)
+
+    @discord.ui.button(label="Play Again (New Bet)", style=discord.ButtonStyle.primary, custom_id="bj_replay_new")
+    async def replay_new(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        await self.channel.send(f"{self.user.mention} how much do you want to bet? type it below 👇")
+
+        def check(m):
+            return m.author == self.user and m.channel == self.channel and m.content.isdigit()
+
+        try:
+            msg = await bot.wait_for("message", timeout=30.0, check=check)
+            new_bet = int(msg.content)
+            if new_bet <= 0:
+                await self.channel.send("bet has to be above 0")
+                return
+            await start_blackjack_game(self.user, self.channel, new_bet)
+        except asyncio.TimeoutError:
+            await self.channel.send(f"{self.user.mention} took too long to respond 💀")
+
 
 class BlackjackView(discord.ui.View):
     def __init__(self, game):
@@ -1169,6 +1215,8 @@ class BlackjackView(discord.ui.View):
             item.disabled = True
         if self.message:
             await self.message.edit(embed=self.game.build_embed(reveal=True), view=self)
+        replay_view = PlayAgainView(self.game.user, self.game.channel, self.game.original_bet)
+        await self.game.channel.send(view=replay_view)
 
     async def on_timeout(self):
         if self.game.finished:
@@ -1189,6 +1237,8 @@ class BlackjackView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             await interaction.response.edit_message(embed=self.game.build_embed(reveal=True), view=self)
+            replay_view = PlayAgainView(self.game.user, self.game.channel, self.game.original_bet)
+            await self.game.channel.send(view=replay_view)
         else:
             await interaction.response.edit_message(embed=self.game.build_embed(), view=self)
 
@@ -1200,6 +1250,8 @@ class BlackjackView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             await interaction.response.edit_message(embed=self.game.build_embed(reveal=True), view=self)
+            replay_view = PlayAgainView(self.game.user, self.game.channel, self.game.original_bet)
+            await self.game.channel.send(view=replay_view)
         else:
             await interaction.response.edit_message(embed=self.game.build_embed(), view=self)
 
@@ -1213,6 +1265,8 @@ class BlackjackView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             await interaction.response.edit_message(embed=self.game.build_embed(reveal=True), view=self)
+            replay_view = PlayAgainView(self.game.user, self.game.channel, self.game.original_bet)
+            await self.game.channel.send(view=replay_view)
         else:
             await interaction.response.edit_message(embed=self.game.build_embed(), view=self)
 
@@ -1224,10 +1278,10 @@ class BlackjackView(discord.ui.View):
         self.update_buttons()
         await interaction.response.edit_message(embed=self.game.build_embed(), view=self)
 
+
 @bot.command(aliases=["bj"])
 async def blackjack(ctx, bet: int = None):
     user = ctx.author
-
     if bet is None:
         await ctx.send("use `!bj <amount>`")
         return
@@ -1240,20 +1294,7 @@ async def blackjack(ctx, bet: int = None):
     if get_wallet(user.id) < bet:
         await ctx.send(f"ur broke, u got **{get_wallet(user.id)}** coins")
         return
-
-    wallet[user.id] -= bet
-    save_data()
-
-    game = BlackjackGame(user, ctx.channel, bet)
-    blackjack_games[user.id] = game
-
-    if game.check_starting_blackjack():
-        await ctx.send(f"{user.mention}", embed=game.build_embed(reveal=True))
-        return
-
-    view = BlackjackView(game)
-    msg = await ctx.send(f"{user.mention}", embed=game.build_embed(), view=view)
-    view.message = msg
+    await start_blackjack_game(user, ctx.channel, bet)
 
 
 
