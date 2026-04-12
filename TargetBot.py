@@ -946,10 +946,14 @@ class BlackjackView(discord.ui.View):
     async def on_timeout(self):
         if self.answered:
             return
+
         self.stop()
         wallet[self.user.id] -= self.bet
         save_wallet()
-        await self.channel.send(f"⏱️ {self.user.mention} timed out! -{self.bet} coins 💸")
+
+        await self.channel.send(
+            f"⏱️ {self.user.mention} timed out! -{self.bet} coins 💸"
+        )
 
     @discord.ui.button(label='Hit', style=discord.ButtonStyle.primary)
     async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -963,26 +967,26 @@ class BlackjackView(discord.ui.View):
         if player_val > 21:
             self.answered = True
             self.stop()
+
             wallet[self.user.id] -= self.bet
             save_wallet()
 
-            embed = discord.Embed(
-                title="BUST!",
-                description=f"Your hand: **{player_val}**\nLost **{self.bet} coins** 💸",
-                color=discord.Color.red()
-            )
             await interaction.response.edit_message(view=None)
-            await self.channel.send(embed=embed)
+
+            await self.channel.send(
+                f"💥 BUST!\nYou: **{player_val}**\nLost **{self.bet} coins** 💸"
+            )
 
         elif player_val == 21:
             self.answered = True
             self.stop()
-            await interaction.response.edit_message(view=None)
+
+            await interaction.response.defer()
             await resolve_blackjack(self.channel, self.user, self.bet, self.player_hand, self.dealer_hand)
 
         else:
             embed = discord.Embed(
-                title="Blackjack",
+                title="🃏 Blackjack",
                 description=f"Your hand: **{player_val}**\nDealer: **?**",
                 color=discord.Color.blue()
             )
@@ -997,11 +1001,19 @@ class BlackjackView(discord.ui.View):
         self.answered = True
         self.stop()
 
-        await interaction.response.edit_message(view=None)
-        await resolve_blackjack(self.channel, self.user, self.bet, self.player_hand, self.dealer_hand)
+        await interaction.response.defer()  # 🔥 IMPORTANT FIX
+
+        await resolve_blackjack(
+            self.channel,
+            self.user,
+            self.bet,
+            self.player_hand,
+            self.dealer_hand
+        )
 
 
 async def resolve_blackjack(channel, user, bet, player_hand, dealer_hand):
+    # dealer plays correctly now
     while hand_value(dealer_hand) < 17:
         dealer_hand.append(deal_card())
 
@@ -1010,25 +1022,31 @@ async def resolve_blackjack(channel, user, bet, player_hand, dealer_hand):
 
     if dealer_val > 21 or player_val > dealer_val:
         wallet[user.id] += bet
-        result = f"🏆 WIN +{bet} coins"
+        result = f"🏆 YOU WIN +{bet} coins"
         color = discord.Color.green()
 
     elif player_val == dealer_val:
-        result = "TIE"
+        result = "🤝 TIE"
         color = discord.Color.yellow()
 
     else:
         wallet[user.id] -= bet
-        result = f"LOSE -{bet} coins"
+        result = f"💀 YOU LOSE -{bet} coins"
         color = discord.Color.red()
 
     save_wallet()
 
     embed = discord.Embed(
-        title="Blackjack Result",
-        description=f"Your hand: **{player_val}**\nDealer: **{dealer_val}**\n\n{result}\nBalance: {wallet[user.id]}",
+        title="🃏 Blackjack Result",
+        description=(
+            f"Your hand: **{player_val}**\n"
+            f"Dealer hand: **{dealer_val}**\n\n"
+            f"{result}\n"
+            f"Balance: **{wallet[user.id]} coins**"
+        ),
         color=color
     )
+
     await channel.send(embed=embed)
 
 
@@ -1037,15 +1055,15 @@ async def blackjack(ctx, bet: int = None):
     user = ctx.author
 
     if bet is None:
-        await ctx.send("Usage: !bj 100")
+        await ctx.send("Usage: `!bj 100`")
         return
 
     if bet <= 0:
-        await ctx.send("bet > 0 bro")
+        await ctx.send("bet must be > 0")
         return
 
     if get_wallet(user.id) < bet:
-        await ctx.send("no coins bro")
+        await ctx.send("not enough coins")
         return
 
     player_hand = [deal_card(), deal_card()]
@@ -1055,7 +1073,7 @@ async def blackjack(ctx, bet: int = None):
     if player_val == 21:
         wallet[user.id] += bet
         save_wallet()
-        await ctx.send(f"BLACKJACK! +{bet} coins 🏆")
+        await ctx.send("BLACKJACK! 🏆 instant win")
         return
 
     embed = discord.Embed(
