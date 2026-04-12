@@ -9,6 +9,9 @@ import time
 
 DATA_FILE = "data.json"
 
+jail_troll_tasks = {}
+jail_guard_active = {}
+guard_cooldown = {}
 jail = {}
 player_health = {}
 player_lives = {}
@@ -964,11 +967,17 @@ async def balance(ctx):
 
 # ===== JAIL SYSTEM =====
 def is_jailed(user_id):
-    return user_id in jail and jail[user_id] > int(time.time())
+    if user_id not in jail:
+        return False
+
+    if random.random() < 0.15:
+        jail_guard_active[user_id] = True
+
+    return jail.get(user_id, 0) > int(time.time())
 
 
 def jail_time_left(user_id):
-    return max(0, jail[user_id] - int(time.time()))
+    return max(0, jail.get(user_id, 0) - int(time.time()))
 
 
 # ============== ROBBERY ===============
@@ -977,8 +986,30 @@ async def rob(ctx, member: discord.Member):
     robber = ctx.author.id
     target = member.id
 
+    # 🚔 jail check (BLOCK ROB + show time left)
     if is_jailed(robber):
-        return await ctx.send(f"🚔 jailed for {jail_time_left(robber)//60} min")
+        left = jail_time_left(robber)
+
+        embed = discord.Embed(
+            title="🚔 YOU ARE JAILED",
+            description="You can't use `rob` right now.",
+            color=discord.Color.dark_red()
+        )
+
+        embed.add_field(
+            name="⏱️ Time Left",
+            value=f"{left//60}m {left%60}s",
+            inline=False
+        )
+
+        if jail_guard_active.get(robber):
+            embed.add_field(
+                name="👁️ GUARD EVENT",
+                value="A guard is watching you… type `!guard` fast 👀",
+                inline=False
+            )
+
+        return await ctx.send(embed=embed)
 
     if member.bot:
         return await ctx.send("you can't rob bots 💀")
@@ -1016,11 +1047,97 @@ async def rob(ctx, member: discord.Member):
 
         save_data()
 
-        await ctx.send(
-            f"💀 failed robbery, you paid **{fail_amount}** coins to {member.mention}\n"
-            f"🚔 you got jailed for 5 minutes"
+        embed = discord.Embed(
+            title="💀 Robbery Failed",
+            description=f"{ctx.author.mention} failed the robbery!",
+            color=discord.Color.red()
         )
 
+        embed.add_field(
+            name="Penalty",
+            value=f"Paid **{fail_amount}** coins to {member.mention}",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Jail",
+            value="🚔 You got jailed for **5 minutes**",
+            inline=False
+        )
+
+        await ctx.send(embed=embed)
+
+
+# ============ GUARD TROLL ===============
+
+@bot.command()
+async def guard(ctx):
+    user = ctx.author.id
+
+    if user not in jail_guard_active:
+        return await ctx.send("no guard watching you 💀")
+
+    del jail_guard_active[user]
+
+    outcome = random.choice(["help", "troll", "ignore"])
+
+    if outcome == "help":
+        jail.pop(user, None)
+        return await ctx.send("🚔 guard felt bad… you got released")
+
+    if outcome == "troll":
+        jail[user] = int(time.time()) + 120
+        return await ctx.send("💀 guard added MORE time (2 min extra)")
+
+    await ctx.send("👁️ guard ignored you… still jailed")
+
+
+
+# ============= ESCAPE/MINIGAME ============
+
+@bot.command()
+async def escape(ctx):
+    user = ctx.author.id
+
+    if not is_jailed(user):
+        return await ctx.send("you're not in jail 💀")
+
+    word = generate_random_word(6)
+
+    embed = discord.Embed(
+        title="🚔 JAIL BREAK",
+        description=(
+            f"Type this word correctly to escape:\n\n"
+            f"**`{word}`**\n\n"
+            f"You have **7 seconds** ⏱️"
+        ),
+        color=discord.Color.orange()
+    )
+
+    await ctx.send(embed=embed)
+
+    def check(m):
+        return m.author.id == user and m.channel == ctx.channel
+
+    try:
+        msg = await bot.wait_for("message", timeout=7, check=check)
+
+        if msg.content == word:
+            del jail[user]
+
+            embed = discord.Embed(
+                title="✅ ESCAPE SUCCESSFUL",
+                description="You broke out of jail 💀",
+                color=discord.Color.green()
+            )
+
+            return await ctx.send(embed=embed)
+
+        else:
+            await ctx.send("❌ wrong word. stay locked 💀")
+
+    except asyncio.TimeoutError:
+        await ctx.send("⏱️ too slow. still jailed 💀")
 
 # ============= BAIL ================
 @bot.command()
