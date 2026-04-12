@@ -861,6 +861,7 @@ monthly_cooldown = {}
 async def daily(ctx):
     user = ctx.author
     last_used = daily_cooldown.get(user.id)
+
     if last_used:
         elapsed = discord.utils.utcnow().timestamp() - last_used
         if elapsed < 86400:
@@ -869,20 +870,25 @@ async def daily(ctx):
             minutes = (remaining % 3600) // 60
             await ctx.send(f"⏱️ Come back in **{hours}h {minutes}m** for your daily! 💰")
             return
+
     daily_cooldown[user.id] = discord.utils.utcnow().timestamp()
     coins = random.randint(100, 500)
     wallet[user.id] = get_wallet(user.id) + coins
     save_wallet()
+
     embed = discord.Embed(title="💰 Daily Coins!", color=discord.Color.gold())
     embed.add_field(name="🪙 Coins Earned", value=f"**+{coins} coins**", inline=True)
     embed.add_field(name="👛 New Balance", value=f"**{wallet[user.id]} coins**", inline=True)
     embed.set_footer(text=f"{user.display_name} collected their daily! Come back in 24h")
-    await ctx.send(f'{user.mention}', embed=embed)
+
+    await ctx.send(f"{user.mention}", embed=embed)
+
 
 @bot.command()
 async def monthly(ctx):
     user = ctx.author
     last_used = monthly_cooldown.get(user.id)
+
     if last_used:
         elapsed = discord.utils.utcnow().timestamp() - last_used
         if elapsed < 2592000:
@@ -890,17 +896,21 @@ async def monthly(ctx):
             days = remaining // 86400
             await ctx.send(f"⏱️ Come back in **{days} days** for your monthly! 💰")
             return
+
     monthly_cooldown[user.id] = discord.utils.utcnow().timestamp()
     coins = random.randint(2000, 5000)
     wallet[user.id] = get_wallet(user.id) + coins
     save_wallet()
+
     embed = discord.Embed(title="💰 Monthly Coins!", color=discord.Color.gold())
     embed.add_field(name="🪙 Coins Earned", value=f"**+{coins} coins**", inline=True)
     embed.add_field(name="👛 New Balance", value=f"**{wallet[user.id]} coins**", inline=True)
     embed.set_footer(text=f"{user.display_name} collected their monthly! Come back in 30 days")
-    await ctx.send(f'{user.mention}', embed=embed)
 
-@bot.command(aliases=['bal'])
+    await ctx.send(f"{user.mention}", embed=embed)
+
+
+@bot.command(aliases=["bal"])
 async def balance(ctx, member: discord.Member = None):
     user = member if member else ctx.author
     embed = discord.Embed(
@@ -910,110 +920,35 @@ async def balance(ctx, member: discord.Member = None):
     )
     await ctx.send(embed=embed)
 
+
 # ============ BLACKJACK ============
 
 def deal_card():
-    cards = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+    cards = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
     return random.choice(cards)
 
+
 def card_value(card):
-    if card in ['J', 'Q', 'K']:
+    if card in ["J", "Q", "K"]:
         return 10
-    elif card == 'A':
+    elif card == "A":
         return 11
     else:
         return int(card)
 
+
 def hand_value(hand):
     value = sum(card_value(c) for c in hand)
-    aces = hand.count('A')
+    aces = hand.count("A")
+
     while value > 21 and aces:
         value -= 10
         aces -= 1
+
     return value
 
 
-class BlackjackView(discord.ui.View):
-    def __init__(self, user, bet, player_hand, dealer_hand, channel):
-        super().__init__(timeout=30)
-        self.user = user
-        self.bet = bet
-        self.player_hand = player_hand
-        self.dealer_hand = dealer_hand
-        self.channel = channel
-        self.answered = False
-
-    async def on_timeout(self):
-        if self.answered:
-            return
-
-        self.stop()
-        wallet[self.user.id] -= self.bet
-        save_wallet()
-
-        await self.channel.send(
-            f"⏱️ {self.user.mention} timed out! -{self.bet} coins 💸"
-        )
-
-    @discord.ui.button(label='Hit', style=discord.ButtonStyle.primary)
-    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.user:
-            await interaction.response.send_message("Not your game.", ephemeral=True)
-            return
-
-        self.player_hand.append(deal_card())
-        player_val = hand_value(self.player_hand)
-
-        if player_val > 21:
-            self.answered = True
-            self.stop()
-
-            wallet[self.user.id] -= self.bet
-            save_wallet()
-
-            await interaction.response.edit_message(view=None)
-
-            await self.channel.send(
-                f"💥 BUST!\nYou: **{player_val}**\nLost **{self.bet} coins** 💸"
-            )
-
-        elif player_val == 21:
-            self.answered = True
-            self.stop()
-
-            await interaction.response.defer()
-            await resolve_blackjack(self.channel, self.user, self.bet, self.player_hand, self.dealer_hand)
-
-        else:
-            embed = discord.Embed(
-                title="🃏 Blackjack",
-                description=f"Your hand: **{player_val}**\nDealer: **?**",
-                color=discord.Color.blue()
-            )
-            await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label='Stand', style=discord.ButtonStyle.danger)
-    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.user:
-            await interaction.response.send_message("Not your game.", ephemeral=True)
-            return
-
-        self.answered = True
-        self.stop()
-
-        await interaction.response.defer()  # 🔥 IMPORTANT FIX
-
-        await resolve_blackjack(
-            self.channel,
-            self.user,
-            self.bet,
-            self.player_hand,
-            self.dealer_hand
-        )
-
-
-async def resolve_blackjack(channel, user, bet, player_hand, dealer_hand):
-    # dealer plays correctly now
+async def resolve_blackjack(interaction, user, bet, player_hand, dealer_hand):
     while hand_value(dealer_hand) < 17:
         dealer_hand.append(deal_card())
 
@@ -1024,11 +959,9 @@ async def resolve_blackjack(channel, user, bet, player_hand, dealer_hand):
         wallet[user.id] += bet
         result = f"🏆 YOU WIN +{bet} coins"
         color = discord.Color.green()
-
     elif player_val == dealer_val:
         result = "🤝 TIE"
         color = discord.Color.yellow()
-
     else:
         wallet[user.id] -= bet
         result = f"💀 YOU LOSE -{bet} coins"
@@ -1047,10 +980,97 @@ async def resolve_blackjack(channel, user, bet, player_hand, dealer_hand):
         color=color
     )
 
-    await channel.send(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 
-@bot.command(aliases=['bj'])
+class BlackjackView(discord.ui.View):
+    def __init__(self, user, bet, player_hand, dealer_hand):
+        super().__init__(timeout=30)
+        self.user = user
+        self.bet = bet
+        self.player_hand = player_hand
+        self.dealer_hand = dealer_hand
+        self.answered = False
+
+    async def on_timeout(self):
+        if self.answered:
+            return
+
+        self.stop()
+        wallet[self.user.id] -= self.bet
+        save_wallet()
+
+    @discord.ui.button(label="Hit", style=discord.ButtonStyle.primary)
+    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("Not your game.", ephemeral=True)
+            return
+
+        self.player_hand.append(deal_card())
+        player_val = hand_value(self.player_hand)
+
+        if player_val > 21:
+            self.answered = True
+            self.stop()
+
+            wallet[self.user.id] -= self.bet
+            save_wallet()
+
+            embed = discord.Embed(
+                title="🃏 Blackjack Result",
+                description=(
+                    f"Your hand: **{player_val}**\n"
+                    f"Dealer hand: **{hand_value(self.dealer_hand)}**\n\n"
+                    f"💥 BUST! Lost **{self.bet} coins** 💸\n"
+                    f"Balance: **{wallet[self.user.id]} coins**"
+                ),
+                color=discord.Color.red()
+            )
+
+            await interaction.response.edit_message(embed=embed, view=None)
+
+        elif player_val == 21:
+            self.answered = True
+            self.stop()
+
+            await interaction.response.edit_message(view=None)
+            await resolve_blackjack(
+                interaction,
+                self.user,
+                self.bet,
+                self.player_hand,
+                self.dealer_hand
+            )
+
+        else:
+            embed = discord.Embed(
+                title="🃏 Blackjack",
+                description=f"Your hand: **{player_val}**\nDealer: **?**",
+                color=discord.Color.blue()
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Stand", style=discord.ButtonStyle.danger)
+    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("Not your game.", ephemeral=True)
+            return
+
+        self.answered = True
+        self.stop()
+
+        await interaction.response.edit_message(view=None)
+
+        await resolve_blackjack(
+            interaction,
+            self.user,
+            self.bet,
+            self.player_hand,
+            self.dealer_hand
+        )
+
+
+@bot.command(aliases=["bj"])
 async def blackjack(ctx, bet: int = None):
     user = ctx.author
 
@@ -1082,8 +1102,9 @@ async def blackjack(ctx, bet: int = None):
         color=discord.Color.blue()
     )
 
-    view = BlackjackView(user, bet, player_hand, dealer_hand, ctx.channel)
+    view = BlackjackView(user, bet, player_hand, dealer_hand)
     await ctx.send(embed=embed, view=view)
+
 
 # ============ BJINFO ============
 @bot.command()
@@ -1098,6 +1119,7 @@ async def bjinfo(ctx):
     embed.add_field(name="🃏 `!blackjack` / `!bj` <bet>", value="Bet coins on a blackjack game\nExample: `!bj 100`", inline=False)
     embed.set_footer(text="Good luck! 🎰")
     await ctx.send(embed=embed)
+
 
 
 import os
