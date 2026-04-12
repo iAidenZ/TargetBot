@@ -9,6 +9,7 @@ import time
 
 DATA_FILE = "data.json"
 
+jail = {}
 player_health = {}
 player_lives = {}
 player_points = {}
@@ -25,18 +26,11 @@ blackjack_games = {}
 
 OWNER_ID = 756539405463978024
 
+
 def load_data():
-    global farm_xp, farm_level, player_health, player_lives, player_points, wallet, economy_claims, bank
+    global farm_xp, farm_level, player_health, player_lives, player_points, wallet, bank, economy_claims, jail
 
     if not os.path.exists(DATA_FILE):
-        farm_xp = {}
-        farm_level = {}
-        player_health = {}
-        player_lives = {}
-        player_points = {}
-        wallet = {}
-        bank = {}
-        economy_claims = {}
         return
 
     with open(DATA_FILE, "r") as f:
@@ -50,6 +44,8 @@ def load_data():
     wallet = {int(k): v for k, v in data.get("wallet", {}).items()}
     bank = {int(k): v for k, v in data.get("bank", {}).items()}
     economy_claims = {int(k): v for k, v in data.get("economy_claims", {}).items()}
+    jail = {int(k): v for k, v in data.get("jail", {}).items()}
+
 
 def save_data():
     with open(DATA_FILE, "w") as f:
@@ -61,39 +57,42 @@ def save_data():
             "player_points": {str(k): v for k, v in player_points.items()},
             "wallet": {str(k): v for k, v in wallet.items()},
             "bank": {str(k): v for k, v in bank.items()},
-            "economy_claims": {str(k): v for k, v in economy_claims.items()}
+            "economy_claims": {str(k): v for k, v in economy_claims.items()},
+            "jail": {str(k): v for k, v in jail.items()}
         }, f, indent=4)
 
+
 def get_wallet(user_id):
-    if user_id not in wallet:
-        wallet[user_id] = 0
+    wallet.setdefault(user_id, 0)
     return wallet[user_id]
 
+
 def get_bank(user_id):
-    if user_id not in bank:
-        bank[user_id] = 0
+    bank.setdefault(user_id, 0)
     return bank[user_id]
 
+
 def get_claims(user_id):
-    if user_id not in economy_claims:
-        economy_claims[user_id] = {
-            "daily": 0,
-            "weekly": 0,
-            "monthly": 0
-        }
+    economy_claims.setdefault(user_id, {"daily": 0, "weekly": 0, "monthly": 0})
     return economy_claims[user_id]
+
 
 def get_level(xp):
     return xp // 100
 
+
 def generate_random_word(length=5):
-    chars = string.ascii_lowercase + string.digits
-    return "".join(random.choice(chars) for _ in range(length))
+    return "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(length))
+
+
+# ================= BOT =================
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 
 @bot.event
 async def on_ready():
@@ -843,7 +842,9 @@ def format_time(seconds_left):
 # ===== BANK SYSTEM =====
 
 def get_bank(user_id):
-    return bank.get(user_id, 0)
+    bank.setdefault(user_id, 0)
+    return bank[user_id]
+
 
 # ===== CLAIM SYSTEM =====
 async def claim_reward(ctx, reward_type, amount, cooldown_seconds):
@@ -861,7 +862,8 @@ async def claim_reward(ctx, reward_type, amount, cooldown_seconds):
         return
 
     claims[reward_type] = now
-    wallet[user_id] = get_wallet(user_id) + amount
+    wallet.setdefault(user_id, 0)
+    wallet[user_id] += amount
     save_data()
 
     embed = discord.Embed(
@@ -871,17 +873,21 @@ async def claim_reward(ctx, reward_type, amount, cooldown_seconds):
     )
     await ctx.send(embed=embed)
 
+
 @bot.command()
 async def daily(ctx):
     await claim_reward(ctx, "daily", 500, 86400)
+
 
 @bot.command()
 async def weekly(ctx):
     await claim_reward(ctx, "weekly", 3500, 604800)
 
+
 @bot.command()
 async def monthly(ctx):
     await claim_reward(ctx, "monthly", 15000, 2592000)
+
 
 # ===== TRANSFER =====
 @bot.command()
@@ -895,14 +901,18 @@ async def transfer(ctx, member: discord.Member, amount: int):
     if get_wallet(sender) < amount:
         return await ctx.send("Not enough coins.")
 
-    wallet[sender] = get_wallet(sender) - amount
-    wallet[target] = get_wallet(target) + amount
+    wallet.setdefault(sender, 0)
+    wallet.setdefault(target, 0)
+
+    wallet[sender] -= amount
+    wallet[target] += amount
     save_data()
 
     await ctx.send(f"{ctx.author.mention} sent **{amount}** coins to {member.mention}.")
 
+
 # ===== DEPOSIT =====
-@bot.command()
+@bot.command(aliases=["dep"])
 async def deposit(ctx, amount: int):
     user = ctx.author.id
 
@@ -912,14 +922,18 @@ async def deposit(ctx, amount: int):
     if get_wallet(user) < amount:
         return await ctx.send("Not enough coins.")
 
-    wallet[user] = get_wallet(user) - amount
-    bank[user] = get_bank(user) + amount
+    wallet.setdefault(user, 0)
+    bank.setdefault(user, 0)
+
+    wallet[user] -= amount
+    bank[user] += amount
     save_data()
 
     await ctx.send(f"Deposited **{amount}** coins.")
 
+
 # ===== WITHDRAW =====
-@bot.command()
+@bot.command(aliases=["wit"])
 async def withdraw(ctx, amount: int):
     user = ctx.author.id
 
@@ -929,11 +943,15 @@ async def withdraw(ctx, amount: int):
     if get_bank(user) < amount:
         return await ctx.send("Not enough in bank.")
 
-    bank[user] = get_bank(user) - amount
-    wallet[user] = get_wallet(user) + amount
+    wallet.setdefault(user, 0)
+    bank.setdefault(user, 0)
+
+    bank[user] -= amount
+    wallet[user] += amount
     save_data()
 
     await ctx.send(f"Withdrew **{amount}** coins.")
+
 
 # ===== BALANCE =====
 @bot.command(aliases=["bal"])
@@ -943,11 +961,24 @@ async def balance(ctx):
         f"{ctx.author.mention} Wallet: **{get_wallet(user)}** | Bank: **{get_bank(user)}**"
     )
 
+
+# ===== JAIL SYSTEM =====
+def is_jailed(user_id):
+    return user_id in jail and jail[user_id] > int(time.time())
+
+
+def jail_time_left(user_id):
+    return max(0, jail[user_id] - int(time.time()))
+
+
 # ============== ROBBERY ===============
 @bot.command()
 async def rob(ctx, member: discord.Member):
     robber = ctx.author.id
     target = member.id
+
+    if is_jailed(robber):
+        return await ctx.send(f"🚔 jailed for {jail_time_left(robber)//60} min")
 
     if member.bot:
         return await ctx.send("you can't rob bots 💀")
@@ -961,23 +992,102 @@ async def rob(ctx, member: discord.Member):
     if get_wallet(robber) < 50:
         return await ctx.send("you need at least 50 coins to rob")
 
+    wallet.setdefault(robber, 0)
+    wallet.setdefault(target, 0)
+
     # 50% success chance
     if random.random() < 0.5:
         steal_amount = random.randint(50, min(300, get_wallet(target)))
 
         wallet[target] -= steal_amount
         wallet[robber] += steal_amount
+
         save_data()
 
         await ctx.send(f"🤑 you robbed **{steal_amount}** coins from {member.mention}")
+
     else:
         fail_amount = random.randint(20, 100)
 
         wallet[robber] -= fail_amount
         wallet[target] += fail_amount
+
+        jail[robber] = int(time.time()) + 300  # 5 min jail
+
         save_data()
 
-        await ctx.send(f"💀 failed robbery, you paid **{fail_amount}** coins to {member.mention}")
+        await ctx.send(
+            f"💀 failed robbery, you paid **{fail_amount}** coins to {member.mention}\n"
+            f"🚔 you got jailed for 5 minutes"
+        )
+
+
+# ============= BAIL ================
+@bot.command()
+async def bail(ctx):
+    user = ctx.author.id
+
+    if not is_jailed(user):
+        return await ctx.send("you're not jailed")
+
+    left = jail_time_left(user)
+    cost = max(100, left * 2)
+
+    if get_wallet(user) < cost:
+        return await ctx.send(f"need **{cost}** coins to bail out")
+
+    wallet[user] -= cost
+    del jail[user]
+    save_data()
+
+    await ctx.send(f"🚔 you paid **{cost}** coins and got released")
+
+
+# ================= SLOTS =====================
+SLOTS_SYMBOLS = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
+
+@bot.command()
+async def slots(ctx, bet: int):
+    user = ctx.author.id
+
+    if bet <= 0:
+        return await ctx.send("bet must be above 0")
+
+    if get_wallet(user) < bet:
+        return await ctx.send("not enough coins")
+
+    wallet.setdefault(user, 0)
+    wallet[user] -= bet
+
+    r1 = random.choice(SLOTS_SYMBOLS)
+    r2 = random.choice(SLOTS_SYMBOLS)
+    r3 = random.choice(SLOTS_SYMBOLS)
+
+    result = f"{r1} | {r2} | {r3}"
+
+    if r1 == r2 == r3:
+        win = bet * 5
+        wallet[user] += win
+        msg = f"🎰 JACKPOT!!\n{result}\nYou won **{win}** coins"
+
+    elif r1 == r2 or r2 == r3 or r1 == r3:
+        win = bet * 2
+        wallet[user] += win
+        msg = f"✨ Nice!\n{result}\nYou won **{win}** coins"
+
+    else:
+        msg = f"💀 You lost\n{result}\n-**{bet}** coins"
+
+    save_data()
+
+    embed = discord.Embed(
+        title="🎲 SLOTS MACHINE",
+        description=msg,
+        color=discord.Color.gold()
+    )
+
+    await ctx.send(embed=embed)
+
 
 
 # ================= BLACKJACK =================
@@ -1403,6 +1513,40 @@ async def blackjack(ctx, bet: int = None):
     view.message = msg
 
 
+# ============= LEADERBOARD ==============
 
+@bot.command(aliases=["lb", "rich"])
+async def leaderboard(ctx):
+    if not wallet:
+        return await ctx.send("no data yet")
+
+    # sort users by wallet balance
+    top = sorted(wallet.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    embed = discord.Embed(
+        title="📈 TOP RICHEST PLAYERS",
+        color=discord.Color.gold()
+    )
+
+    desc = ""
+
+    for i, (user_id, amount) in enumerate(top, start=1):
+        member = ctx.guild.get_member(user_id)
+
+        if member:
+            name = member.display_name
+        else:
+            name = f"User {user_id}"
+
+        medal = "👑" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🔹"
+
+        desc += f"{medal} **{i}. {name}** — `{amount}` coins\n"
+
+    embed.description = desc
+    embed.set_footer(text="based on wallet balance 💰")
+
+    await ctx.send(embed=embed)
+
+    
 
 bot.run(os.environ.get("TOKEN"))
