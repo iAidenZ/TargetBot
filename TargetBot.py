@@ -13,6 +13,7 @@ player_lives = {}
 player_points = {}
 farm_xp = {}
 farm_level = {}
+wallet = {}
 
 def load_data():
     global farm_xp, farm_level, player_health, player_lives, player_points
@@ -25,6 +26,13 @@ def load_data():
             player_lives = {int(k): v for k, v in data.get("player_lives", {}).items()}
             player_points = {int(k): v for k, v in data.get("player_points", {}).items()}
 
+def load_wallet():
+    global wallet
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            data = json.load(f)
+            wallet = {int(k): v for k, v in data.get("wallet", {}).items()}
+
 def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump({
@@ -35,6 +43,18 @@ def save_data():
             "player_points": {str(k): v for k, v in player_points.items()}
         }, f, indent=4)
 
+def save_wallet():
+    with open(DATA_FILE, "r") as f:
+        data = json.load(f)
+    data["wallet"] = {str(k): v for k, v in wallet.items()}
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+def get_wallet(user_id):
+    if user_id not in wallet:
+        wallet[user_id] = 0
+    return wallet[user_id]
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -43,8 +63,10 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 @bot.event
 async def on_ready():
     load_data()
+    load_wallet()
     print(f'Logged as {bot.user}')
 
+    
 # ============ WANTED ============
 @bot.command()
 async def wanted(ctx):
@@ -876,10 +898,12 @@ async def daily(ctx):
     save_wallet()
     embed = discord.Embed(
         title="💰 Daily Coins!",
-        description=f"{user.mention} collected **{coins} coins**!\n\n**Balance:** {wallet[user.id]} coins",
         color=discord.Color.gold()
     )
-    await ctx.send(embed=embed)
+    embed.add_field(name="🪙 Coins Earned", value=f"**+{coins} coins**", inline=True)
+    embed.add_field(name="👛 New Balance", value=f"**{wallet[user.id]} coins**", inline=True)
+    embed.set_footer(text=f"{user.display_name} collected their daily! Come back in 24h")
+    await ctx.send(f'{user.mention}', embed=embed)
 
 @bot.command()
 async def monthly(ctx):
@@ -890,7 +914,7 @@ async def monthly(ctx):
         if elapsed < 2592000:
             remaining = int(2592000 - elapsed)
             days = remaining // 86400
-            await ctx.send(f"come back in **{days} days** for your monthly! 💰")
+            await ctx.send(f"⏱️ Come back in **{days} days** for your monthly! 💰")
             return
     monthly_cooldown[user.id] = discord.utils.utcnow().timestamp()
     coins = random.randint(2000, 5000)
@@ -898,16 +922,18 @@ async def monthly(ctx):
     save_wallet()
     embed = discord.Embed(
         title="💰 Monthly Coins!",
-        description=f"{user.mention} collected **{coins} coins**!\n\n**Balance:** {wallet[user.id]} coins",
         color=discord.Color.gold()
     )
-    await ctx.send(embed=embed)
+    embed.add_field(name="🪙 Coins Earned", value=f"**+{coins} coins**", inline=True)
+    embed.add_field(name="👛 New Balance", value=f"**{wallet[user.id]} coins**", inline=True)
+    embed.set_footer(text=f"{user.display_name} collected their monthly! Come back in 30 days")
+    await ctx.send(f'{user.mention}', embed=embed)
 
-@bot.command()
+@bot.command(aliases=['bal'])
 async def balance(ctx, member: discord.Member = None):
     user = member if member else ctx.author
     embed = discord.Embed(
-        title="Wallet",
+        title="👛 Wallet",
         description=f"{user.mention} has **{get_wallet(user.id)} coins** 💰",
         color=discord.Color.gold()
     )
