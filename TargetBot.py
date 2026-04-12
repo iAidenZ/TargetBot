@@ -791,33 +791,36 @@ async def ping(ctx, member: discord.Member = None, times: int = 3):
 
 
 # ================== LINK COMMAND ==================
+
+
 @bot.command(name="link")
 async def link(ctx):
-    website_url = "https://iaidenz.pythonanywhere.com/track "   # Your site
-
-    embed = discord.Embed(
-        title="TargetBot Commands List",
-        description="Click the button below to open our full commands website!",
-        color=0x00ff00
-    )
-    embed.set_footer(text=f"Requested by {ctx.author}")
-
-    view = discord.ui.View()
-    button = discord.ui.Button(
-        label="Click here to open the SITE",
-        style=discord.ButtonStyle.link,
-        url=website_url
-    )
-    view.add_item(button)
-
-    # Try sending in DM (only you see it)
     try:
-        await ctx.author.send(embed=embed, view=view)
-        await ctx.send("✅ Sent you the commands link in DM!", delete_after=8)
-    except discord.Forbidden:
-        # If DMs are closed, send in channel
-        await ctx.send(embed=embed, view=view)
+        website_url = "https://iaidenz.pythonanywhere.com/track"
 
+        embed = discord.Embed(
+            title="TargetBot Commands List",
+            description="Click the button below to open our full commands website!",
+            color=0x00ff00
+        )
+        embed.set_footer(text=f"Requested by {ctx.author}")
+
+        view = discord.ui.View()
+        button = discord.ui.Button(
+            label="Click here to open the SITE",
+            style=discord.ButtonStyle.link,
+            url=website_url
+        )
+        view.add_item(button)
+
+        try:
+            await ctx.author.send(embed=embed, view=view)
+            await ctx.send("✅ Sent you the commands link in DM!", delete_after=8)
+        except discord.Forbidden:
+            await ctx.send(embed=embed, view=view)
+
+    except Exception as e:
+        await ctx.send(f"Error: {e}")
 
 import os
 bot.run(os.environ.get('TOKEN'))
