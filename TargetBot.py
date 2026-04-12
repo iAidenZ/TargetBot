@@ -9,6 +9,7 @@ import time
 
 DATA_FILE = "data.json"
 
+private_bal = {}
 jail_troll_tasks = {}
 jail_guard_active = {}
 guard_cooldown = {}
@@ -849,6 +850,15 @@ def get_bank(user_id):
     return bank[user_id]
 
 
+# === Private Balance ====
+
+@bot.command(aliases=["prv"])
+async def private(ctx):
+    user = ctx.author.id
+    private_bal[user] = True
+    await ctx.send("🔒 your balance is now private")
+
+
 # ===== CLAIM SYSTEM =====
 async def claim_reward(ctx, reward_type, amount, cooldown_seconds):
     user_id = ctx.author.id
@@ -958,10 +968,15 @@ async def withdraw(ctx, amount: int):
 
 # ===== BALANCE =====
 @bot.command(aliases=["bal"])
-async def balance(ctx):
-    user = ctx.author.id
+async def balance(ctx, member: discord.Member = None):
+    user = member.id if member else ctx.author.id
+
+    # block if viewing someone else's private balance
+    if member and private_bal.get(user):
+        return await ctx.send("🔒 this user has a private balance")
+
     await ctx.send(
-        f"{ctx.author.mention} Wallet: **{get_wallet(user)}** | Bank: **{get_bank(user)}**"
+        f"{member.mention if member else ctx.author.mention} Wallet: **{get_wallet(user)}** | Bank: **{get_bank(user)}**"
     )
 
 
