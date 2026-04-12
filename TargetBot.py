@@ -793,18 +793,18 @@ async def ping(ctx, member: discord.Member = None, times: int = 3):
 # ================== LINK COMMAND ==================
 @bot.command(name="link")
 async def link(ctx):
-    website_url = "https://44fd-160-178-1-241.ngrok-free.app/"   # Your site
+    website_url = "hhttps://iaidenz.pythonanywhere.com/track"   # Your site
 
     embed = discord.Embed(
         title="TargetBot Commands List",
-        description="BEST GAME OF ALL TIME, if u didnt like it go fuck ur self idgaf",
+        description="Click the button below to open our full commands website!",
         color=0x00ff00
     )
     embed.set_footer(text=f"Requested by {ctx.author}")
 
     view = discord.ui.View()
     button = discord.ui.Button(
-        label="Dont forget to leave a comment pls :3",
+        label="Click here to open the SITE",
         style=discord.ButtonStyle.link,
         url=website_url
     )
