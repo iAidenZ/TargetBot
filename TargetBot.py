@@ -7,7 +7,7 @@ import os
 import string
 import time
 
-DATA_FILE = "data.json"
+DATA_FILE = "/app/data/data.json"
 
 private_bal = {}
 jail_troll_tasks = {}
