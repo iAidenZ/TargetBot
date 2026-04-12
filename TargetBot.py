@@ -15,6 +15,7 @@ player_points = {}
 farm_xp = {}
 farm_level = {}
 wallet = {}
+bank = {}
 economy_claims = {}
 afk_users = {}
 jerk_cooldown = {}
@@ -25,7 +26,7 @@ blackjack_games = {}
 OWNER_ID = 756539405463978024
 
 def load_data():
-    global farm_xp, farm_level, player_health, player_lives, player_points, wallet, economy_claims
+    global farm_xp, farm_level, player_health, player_lives, player_points, wallet, economy_claims, bank
 
     if not os.path.exists(DATA_FILE):
         farm_xp = {}
@@ -34,6 +35,7 @@ def load_data():
         player_lives = {}
         player_points = {}
         wallet = {}
+        bank = {}
         economy_claims = {}
         return
 
@@ -46,6 +48,7 @@ def load_data():
     player_lives = {int(k): v for k, v in data.get("player_lives", {}).items()}
     player_points = {int(k): v for k, v in data.get("player_points", {}).items()}
     wallet = {int(k): v for k, v in data.get("wallet", {}).items()}
+    bank = {int(k): v for k, v in data.get("bank", {}).items()}
     economy_claims = {int(k): v for k, v in data.get("economy_claims", {}).items()}
 
 def save_data():
@@ -57,6 +60,7 @@ def save_data():
             "player_lives": {str(k): v for k, v in player_lives.items()},
             "player_points": {str(k): v for k, v in player_points.items()},
             "wallet": {str(k): v for k, v in wallet.items()},
+            "bank": {str(k): v for k, v in bank.items()},
             "economy_claims": {str(k): v for k, v in economy_claims.items()}
         }, f, indent=4)
 
@@ -64,6 +68,11 @@ def get_wallet(user_id):
     if user_id not in wallet:
         wallet[user_id] = 0
     return wallet[user_id]
+
+def get_bank(user_id):
+    if user_id not in bank:
+        bank[user_id] = 0
+    return bank[user_id]
 
 def get_claims(user_id):
     if user_id not in economy_claims:
@@ -90,37 +99,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     load_data()
     print(f"Logged as {bot.user}")
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    if message.author.id in afk_users:
-        afk_data = afk_users.pop(message.author.id)
-        time_away = discord.utils.utcnow() - afk_data["time"]
-        minutes = int(time_away.total_seconds() // 60)
-        embed = discord.Embed(
-            description=f"Welcome back {message.author.mention}! You were AFK for **{minutes} min**",
-            color=discord.Color.green()
-        )
-        await message.channel.send(embed=embed)
-        await bot.process_commands(message)
-        return
-
-    notified = []
-    for mentioned in message.mentions:
-        if mentioned.id in afk_users and mentioned.id not in notified:
-            notified.append(mentioned.id)
-            afk_data = afk_users[mentioned.id]
-            await message.channel.send(f"{message.author.mention}")
-            embed = discord.Embed(
-                description=f"Hey {message.author.mention}, {mentioned.mention} is currently AFK: **{afk_data['reason']}**",
-                color=discord.Color.light_gray()
-            )
-            await message.channel.send(embed=embed)
-
-    await bot.process_commands(message)
 
 
 # ============ WANTED ============
@@ -850,8 +828,6 @@ async def link(ctx):
     except Exception as e:
         await ctx.send(f"Error: {e}")
 
-# ================= BANK =================
-
 def format_time(seconds_left):
     hours, remainder = divmod(seconds_left, 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -864,6 +840,12 @@ def format_time(seconds_left):
         parts.append(f"{seconds}s")
     return " ".join(parts)
 
+# ===== BANK SYSTEM =====
+
+def get_bank(user_id):
+    return bank.get(user_id, 0)
+
+# ===== CLAIM SYSTEM =====
 async def claim_reward(ctx, reward_type, amount, cooldown_seconds):
     user_id = ctx.author.id
     claims = get_claims(user_id)
@@ -901,9 +883,102 @@ async def weekly(ctx):
 async def monthly(ctx):
     await claim_reward(ctx, "monthly", 15000, 2592000)
 
+# ===== TRANSFER =====
+@bot.command()
+async def transfer(ctx, member: discord.Member, amount: int):
+    sender = ctx.author.id
+    target = member.id
+
+    if amount <= 0:
+        return await ctx.send("Invalid amount.")
+
+    if get_wallet(sender) < amount:
+        return await ctx.send("Not enough coins.")
+
+    wallet[sender] = get_wallet(sender) - amount
+    wallet[target] = get_wallet(target) + amount
+    save_data()
+
+    await ctx.send(f"{ctx.author.mention} sent **{amount}** coins to {member.mention}.")
+
+# ===== DEPOSIT =====
+@bot.command()
+async def deposit(ctx, amount: int):
+    user = ctx.author.id
+
+    if amount <= 0:
+        return await ctx.send("Invalid amount.")
+
+    if get_wallet(user) < amount:
+        return await ctx.send("Not enough coins.")
+
+    wallet[user] = get_wallet(user) - amount
+    bank[user] = get_bank(user) + amount
+    save_data()
+
+    await ctx.send(f"Deposited **{amount}** coins.")
+
+# ===== WITHDRAW =====
+@bot.command()
+async def withdraw(ctx, amount: int):
+    user = ctx.author.id
+
+    if amount <= 0:
+        return await ctx.send("Invalid amount.")
+
+    if get_bank(user) < amount:
+        return await ctx.send("Not enough in bank.")
+
+    bank[user] = get_bank(user) - amount
+    wallet[user] = get_wallet(user) + amount
+    save_data()
+
+    await ctx.send(f"Withdrew **{amount}** coins.")
+
+# ===== BALANCE =====
 @bot.command(aliases=["bal"])
 async def balance(ctx):
-    await ctx.send(f"{ctx.author.mention} you got **{get_wallet(ctx.author.id)}** coins.")
+    user = ctx.author.id
+    await ctx.send(
+        f"{ctx.author.mention} Wallet: **{get_wallet(user)}** | Bank: **{get_bank(user)}**"
+    )
+
+# ============== ROBBERY ===============
+@bot.command()
+async def rob(ctx, member: discord.Member):
+    robber = ctx.author.id
+    target = member.id
+
+    if member.bot:
+        return await ctx.send("you can't rob bots 💀")
+
+    if robber == target:
+        return await ctx.send("bro rob yourself? 💀")
+
+    if get_wallet(target) < 100:
+        return await ctx.send("they too broke to rob")
+
+    if get_wallet(robber) < 50:
+        return await ctx.send("you need at least 50 coins to rob")
+
+    # 50% success chance
+    if random.random() < 0.5:
+        steal_amount = random.randint(50, min(300, get_wallet(target)))
+
+        wallet[target] -= steal_amount
+        wallet[robber] += steal_amount
+        save_data()
+
+        await ctx.send(f"🤑 you robbed **{steal_amount}** coins from {member.mention}")
+    else:
+        fail_amount = random.randint(20, 100)
+
+        wallet[robber] -= fail_amount
+        wallet[target] += fail_amount
+        save_data()
+
+        await ctx.send(f"💀 failed robbery, you paid **{fail_amount}** coins to {member.mention}")
+
 
 # ================= BLACKJACK =================
 
