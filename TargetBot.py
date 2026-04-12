@@ -933,17 +933,14 @@ def hand_value(hand):
 
 class BlackjackView(discord.ui.View):
     def __init__(self, user, bet, player_hand, dealer_hand, channel):
-        super().__init__(timeout=30)
+        super().__init__(timeout=45)  # increased timeout
         self.user = user
         self.bet = bet
         self.player_hand = player_hand
         self.dealer_hand = dealer_hand
         self.channel = channel
-        self.answered = False
 
     async def on_timeout(self):
-        if self.answered:
-            return
         for item in self.children:
             item.disabled = True
         await self.channel.send(f"⏱️ {self.user.mention} timed out! You lost **{self.bet} coins** 💸")
@@ -953,111 +950,122 @@ class BlackjackView(discord.ui.View):
     @discord.ui.button(label='Hit', style=discord.ButtonStyle.primary)
     async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.user:
-            await interaction.response.send_message("This isn't your game!", ephemeral=True)
+            await interaction.response.send_message("Not your game!", ephemeral=True)
             return
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(view=self)
 
         self.player_hand.append(deal_card())
         player_val = hand_value(self.player_hand)
 
+        # Disable buttons on current message
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
         if player_val > 21:
-            self.answered = True
             wallet[self.user.id] -= self.bet
             save_wallet()
-            embed = discord.Embed(
-                title="BUST!",
-                description=f"Your hand: **{player_val}**\n\nYou busted! Lost **{self.bet} coins** 💸\n**Balance:** {wallet[self.user.id]} coins",
-                color=discord.Color.red()
-            )
+            embed = discord.Embed(title="💥 BUST!", 
+                                  description=f"Your hand: **{player_val}**\nYou lost **{self.bet} coins**", 
+                                  color=discord.Color.red())
             await self.channel.send(embed=embed)
-        elif player_val == 21:
-            self.answered = True
-            await resolve_blackjack(self.channel, self.user, self.bet, self.player_hand, self.dealer_hand)
-        else:
-            embed = discord.Embed(
-                title="Blackjack",
-                description=f"Your hand: **{player_val}**\nDealer: **?**\n\nWhat do you do?",
-                color=discord.Color.blue()
-            )
-            view = BlackjackView(self.user, self.bet, self.player_hand, self.dealer_hand, self.channel)
-            await self.channel.send(embed=embed, view=view)
+            return
+
+        if player_val == 21:
+            await self.resolve_game()
+            return
+
+        # Continue game
+        embed = discord.Embed(
+            title="🃏 Blackjack",
+            description=f"**Your hand:** {', '.join(self.player_hand)} (**{player_val}**)\n"
+                        f"**Dealer shows:** {self.dealer_hand[0]}",
+            color=discord.Color.blue()
+        )
+        new_view = BlackjackView(self.user, self.bet, self.player_hand, self.dealer_hand, self.channel)
+        await self.channel.send(embed=embed, view=new_view)
 
     @discord.ui.button(label='Stand', style=discord.ButtonStyle.danger)
     async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.user:
-            await interaction.response.send_message("This isn't your game!", ephemeral=True)
+            await interaction.response.send_message("Not your game!", ephemeral=True)
             return
-        self.answered = True
+
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(view=self)
-        await resolve_blackjack(self.channel, self.user, self.bet, self.player_hand, self.dealer_hand)
 
-async def resolve_blackjack(channel, user, bet, player_hand, dealer_hand):
-    while hand_value(dealer_hand) < 17:
-        dealer_hand.append(deal_card())
+        await self.resolve_game()
 
-    player_val = hand_value(player_hand)
-    dealer_val = hand_value(dealer_hand)
+    async def resolve_game(self):
+        """Dealer plays + show final result"""
+        await self.channel.send("**Dealer is thinking...**")
 
-    if dealer_val > 21 or player_val > dealer_val:
-        wallet[user.id] += bet
+        # Dealer hits until 17 or more
+        while hand_value(self.dealer_hand) < 17:
+            self.dealer_hand.append(deal_card())
+            await asyncio.sleep(1.2)   # small delay so it feels real
+
+        player_val = hand_value(self.player_hand)
+        dealer_val = hand_value(self.dealer_hand)
+
+        if dealer_val > 21 or player_val > dealer_val:
+            wallet[self.user.id] += self.bet * 2   # most people do 1:1 (win bet + get bet back)
+            result = f"🏆 **YOU WIN!** +**{self.bet*2} coins**"
+            color = discord.Color.green()
+        elif player_val == dealer_val:
+            wallet[self.user.id] += self.bet  # push = get bet back
+            result = "🤝 **PUSH** - Bet returned"
+            color = discord.Color.yellow()
+        else:
+            wallet[self.user.id] -= self.bet
+            result = f"😭 **YOU LOSE** -**{self.bet} coins**"
+            color = discord.Color.red()
+
         save_wallet()
-        result = f"🏆 YOU WIN W gng! +**{bet} coins**"
-        color = discord.Color.green()
-    elif player_val == dealer_val:
-        result = f"TIE! No coins lost or gained ggs"
-        color = discord.Color.yellow()
-    else:
-        wallet[user.id] -= bet
-        save_wallet()
-        result = f"YOU LOSE LMFAO! -**{bet} coins**"
-        color = discord.Color.red()
 
-    embed = discord.Embed(
-        title="Blackjack Result",
-        description=f"Your hand: **{player_val}**\nDealer hand: **{dealer_val}**\n\n{result}\n**Balance:** {wallet[user.id]} coins",
-        color=color
-    )
-    await channel.send(embed=embed)
+        embed = discord.Embed(
+            title="Blackjack - Game Over",
+            description=f"**Your hand:** {', '.join(self.player_hand)} (**{player_val}**)\n"
+                        f"**Dealer hand:** {', '.join(self.dealer_hand)} (**{dealer_val}**)\n\n"
+                        f"{result}\n**Balance:** {wallet[self.user.id]} coins",
+            color=color
+        )
+        await self.channel.send(embed=embed)
+
 
 @bot.command(aliases=['bj'])
 async def blackjack(ctx, bet: int = None):
-    user = ctx.author
-    if bet is None:
-        await ctx.send("Usage: `!blackjack 100` or `!bj 100`")
+    if bet is None or bet <= 0:
+        await ctx.send("Usage: `!bj 50`")
         return
-    if bet <= 0:
-        await ctx.send("Bet must be more than 0 buddy")
-        return
-    if get_wallet(user.id) < bet:
-        await ctx.send(f"You don't have enough coins brokeass! Your balance: **{get_wallet(user.id)} coins** 💸")
+
+    if wallet.get(ctx.author.id, 0) < bet:
+        await ctx.send(f"You don't have enough coins! Balance: **{wallet.get(ctx.author.id, 0)}**")
         return
 
     player_hand = [deal_card(), deal_card()]
     dealer_hand = [deal_card(), deal_card()]
     player_val = hand_value(player_hand)
 
+    # Natural Blackjack
     if player_val == 21:
-        wallet[user.id] += bet
+        wallet[ctx.author.id] += bet * 2
         save_wallet()
-        embed = discord.Embed(
-            title="BLACKJACK! 21!",
-            description=f"Your hand: **{player_val}**\n\n🏆 INSTANT WIN! +**{bet} coins**\n**Balance:** {wallet[user.id]} coins",
-            color=discord.Color.gold()
-        )
+        embed = discord.Embed(title="🃏 NATURAL BLACKJACK!", 
+                              description=f"You got **21** instantly!\n+**{bet*2} coins**", 
+                              color=discord.Color.gold())
         await ctx.send(embed=embed)
         return
 
     embed = discord.Embed(
         title="🃏 Blackjack",
-        description=f"Your hand: **{player_val}**\nDealer: **?**\n\nWhat do you do?",
+        description=f"**Your hand:** {', '.join(player_hand)} (**{player_val}**)\n"
+                    f"**Dealer shows:** {dealer_hand[0]}",
         color=discord.Color.blue()
     )
-    view = BlackjackView(user, bet, player_hand, dealer_hand, ctx.channel)
-    await ctx.send(f'{user.mention}', embed=embed, view=view)
+
+    view = BlackjackView(ctx.author, bet, player_hand, dealer_hand, ctx.channel)
+    await ctx.send(f'{ctx.author.mention}', embed=embed, view=view)
 
 # ============ BJINFO ============
 @bot.command()
