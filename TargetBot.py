@@ -270,8 +270,6 @@ async def stalk(ctx, member: discord.Member = None):
     await ctx.send(embed=final)
 
 # ============ AFK ============
-afk_users = {}
-
 @bot.command()
 async def afk(ctx, *, reason="AFK"):
     afk_users[ctx.author.id] = {"reason": reason, "time": discord.utils.utcnow()}
@@ -282,52 +280,7 @@ async def afk(ctx, *, reason="AFK"):
     embed.set_footer(text="They will be notified when mentioned 💤")
     await ctx.send(embed=embed)
 
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    # remove afk when they send a message
-    if message.author.id in afk_users:
-        afk_data = afk_users.pop(message.author.id)
-        time_away = discord.utils.utcnow() - afk_data["time"]
-        minutes = int(time_away.total_seconds() // 60)
-        embed = discord.Embed(
-            description=f"Welcome back {message.author.mention}! You were AFK for **{minutes} min**",
-            color=discord.Color.green()
-        )
-        await message.channel.send(embed=embed)
-        await bot.process_commands(message)
-        return
-
-    # notify if they mention an afk user
-    notified = []
-    for mentioned in message.mentions:
-        if mentioned.id in afk_users and mentioned.id not in notified:
-            notified.append(mentioned.id)
-            afk_data = afk_users[mentioned.id]
-            await message.channel.send(f"{message.author.mention}")
-            embed = discord.Embed(
-                description=f"Hey {message.author.mention}, {mentioned.mention} is currently AFK: **{afk_data['reason']}**",
-                color=discord.Color.light_gray()
-            )
-            await message.channel.send(embed=embed)
-
-    await bot.process_commands(message)
-
 # ============= Bazooka ==============
-
-import random
-import string
-
-player_health = {}
-player_lives = {}
-player_points = {}
-
-def generate_random_word(length=5):
-    chars = string.ascii_lowercase + string.digits
-    return "".join(random.choice(chars) for _ in range(length))
-
 @bot.command()
 async def bazooka(ctx, member: discord.Member = None):
     if member is None:
@@ -456,7 +409,8 @@ class DateView(discord.ui.View):
         await interaction.followup.send(f'looks like {self.person1.mention} rejected {self.person2.mention} 💔')
 
 
-        # ============ SPIN ============
+# ============ SPIN ============
+
 @bot.command()
 async def gay(ctx):
     members = [m for m in ctx.guild.members if not m.bot]
@@ -484,14 +438,6 @@ async def gay(ctx):
 
 
 # ============ FARM / TAP TAP ============
-farm_xp = {}
-farm_level = {}
-jerk_cooldown = {}
-jerk_active = set()
-
-def get_level(xp):
-    return xp // 100
-
 class TapTapView(discord.ui.View):
     def __init__(self, user, buttons, correct):
         super().__init__(timeout=3)
@@ -627,7 +573,6 @@ async def jerk(ctx):
     await asyncio.sleep(2)
     await tap_tap(ctx, user)
 
-
     # ============ EXPOSE ============
 expose_evidence = [
     "Was googling 'how to be cool' at 2AM 🔍",
@@ -742,9 +687,6 @@ async def expose(ctx, accomplice: discord.Member = None, victim: discord.Member 
 
 
 # ============ ENTITY ============
-OWNER_ID = 756539405463978024
-entity_cooldown = {}
-
 @bot.command()
 async def entity(ctx, member: discord.Member = None):
     if ctx.author.id != OWNER_ID:
