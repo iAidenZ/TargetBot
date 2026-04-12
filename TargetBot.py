@@ -66,7 +66,7 @@ async def on_ready():
     load_wallet()
     print(f'Logged as {bot.user}')
 
-    
+
 # ============ WANTED ============
 @bot.command()
 async def wanted(ctx):
@@ -853,30 +853,7 @@ async def link(ctx):
         await ctx.send(f"Error: {e}")
 
 
-        # ============ CURRENCY & BLACKJACK ============
-import json
-
-wallet = {}
-
-def get_wallet(user_id):
-    if user_id not in wallet:
-        wallet[user_id] = 0
-    return wallet[user_id]
-
-def save_wallet():
-    with open("bot_data.json", "r") as f:
-        data = json.load(f)
-    data["wallet"] = {str(k): v for k, v in wallet.items()}
-    with open("bot_data.json", "w") as f:
-        json.dump(data, f, indent=4)
-
-def load_wallet():
-    global wallet
-    if os.path.exists("bot_data.json"):
-        with open("bot_data.json", "r") as f:
-            data = json.load(f)
-            wallet = {int(k): v for k, v in data.get("wallet", {}).items()}
-
+# ============ CURRENCY & BLACKJACK ============
 daily_cooldown = {}
 monthly_cooldown = {}
 
@@ -896,10 +873,7 @@ async def daily(ctx):
     coins = random.randint(100, 500)
     wallet[user.id] = get_wallet(user.id) + coins
     save_wallet()
-    embed = discord.Embed(
-        title="💰 Daily Coins!",
-        color=discord.Color.gold()
-    )
+    embed = discord.Embed(title="💰 Daily Coins!", color=discord.Color.gold())
     embed.add_field(name="🪙 Coins Earned", value=f"**+{coins} coins**", inline=True)
     embed.add_field(name="👛 New Balance", value=f"**{wallet[user.id]} coins**", inline=True)
     embed.set_footer(text=f"{user.display_name} collected their daily! Come back in 24h")
@@ -920,10 +894,7 @@ async def monthly(ctx):
     coins = random.randint(2000, 5000)
     wallet[user.id] = get_wallet(user.id) + coins
     save_wallet()
-    embed = discord.Embed(
-        title="💰 Monthly Coins!",
-        color=discord.Color.gold()
-    )
+    embed = discord.Embed(title="💰 Monthly Coins!", color=discord.Color.gold())
     embed.add_field(name="🪙 Coins Earned", value=f"**+{coins} coins**", inline=True)
     embed.add_field(name="👛 New Balance", value=f"**{wallet[user.id]} coins**", inline=True)
     embed.set_footer(text=f"{user.display_name} collected their monthly! Come back in 30 days")
@@ -960,9 +931,6 @@ def hand_value(hand):
         aces -= 1
     return value
 
-def hand_display(hand):
-    return ' | '.join(hand)
-
 class BlackjackView(discord.ui.View):
     def __init__(self, user, bet, player_hand, dealer_hand, channel):
         super().__init__(timeout=30)
@@ -987,7 +955,6 @@ class BlackjackView(discord.ui.View):
         if interaction.user != self.user:
             await interaction.response.send_message("This isn't your game!", ephemeral=True)
             return
-        self.answered = True
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(view=self)
@@ -996,20 +963,22 @@ class BlackjackView(discord.ui.View):
         player_val = hand_value(self.player_hand)
 
         if player_val > 21:
+            self.answered = True
             wallet[self.user.id] -= self.bet
             save_wallet()
             embed = discord.Embed(
                 title="BUST!",
-                description=f"Your hand: **{hand_display(self.player_hand)}** = {player_val}\n\nYou busted! Lost **{self.bet} coins** 💸\n**Balance:** {wallet[self.user.id]} coins",
+                description=f"Your hand: **{player_val}**\n\nYou busted! Lost **{self.bet} coins** 💸\n**Balance:** {wallet[self.user.id]} coins",
                 color=discord.Color.red()
             )
             await self.channel.send(embed=embed)
         elif player_val == 21:
+            self.answered = True
             await resolve_blackjack(self.channel, self.user, self.bet, self.player_hand, self.dealer_hand)
         else:
             embed = discord.Embed(
                 title="Blackjack",
-                description=f"Your hand: **{hand_display(self.player_hand)}** = {player_val}\nDealer: **{self.dealer_hand[0]} | ?**\n\nWhat do you do?",
+                description=f"Your hand: **{player_val}**\nDealer: **?**\n\nWhat do you do?",
                 color=discord.Color.blue()
             )
             view = BlackjackView(self.user, self.bet, self.player_hand, self.dealer_hand, self.channel)
@@ -1044,24 +1013,24 @@ async def resolve_blackjack(channel, user, bet, player_hand, dealer_hand):
     else:
         wallet[user.id] -= bet
         save_wallet()
-        result = f" YOU LOSE LMFAO! -**{bet} coins**"
+        result = f"YOU LOSE LMFAO! -**{bet} coins**"
         color = discord.Color.red()
 
     embed = discord.Embed(
         title="Blackjack Result",
-        description=f"Your hand: **{hand_display(player_hand)}** = {player_val}\nDealer hand: **{hand_display(dealer_hand)}** = {dealer_val}\n\n{result}\n**Balance:** {wallet[user.id]} coins",
+        description=f"Your hand: **{player_val}**\nDealer hand: **{dealer_val}**\n\n{result}\n**Balance:** {wallet[user.id]} coins",
         color=color
     )
     await channel.send(embed=embed)
 
-@bot.command()
+@bot.command(aliases=['bj'])
 async def blackjack(ctx, bet: int = None):
     user = ctx.author
     if bet is None:
-        await ctx.send("Usage: `!blackjack 100`")
+        await ctx.send("Usage: `!blackjack 100` or `!bj 100`")
         return
     if bet <= 0:
-        await ctx.send("Bet must be more than 0 buddy ")
+        await ctx.send("Bet must be more than 0 buddy")
         return
     if get_wallet(user.id) < bet:
         await ctx.send(f"You don't have enough coins brokeass! Your balance: **{get_wallet(user.id)} coins** 💸")
@@ -1076,7 +1045,7 @@ async def blackjack(ctx, bet: int = None):
         save_wallet()
         embed = discord.Embed(
             title="BLACKJACK! 21!",
-            description=f"Your hand: **{hand_display(player_hand)}** = {player_val}\n\n🏆 INSTANT WIN! +**{bet} coins**\n**Balance:** {wallet[user.id]} coins",
+            description=f"Your hand: **{player_val}**\n\n🏆 INSTANT WIN! +**{bet} coins**\n**Balance:** {wallet[user.id]} coins",
             color=discord.Color.gold()
         )
         await ctx.send(embed=embed)
@@ -1084,15 +1053,13 @@ async def blackjack(ctx, bet: int = None):
 
     embed = discord.Embed(
         title="🃏 Blackjack",
-        description=f"Your hand: **{hand_display(player_hand)}** = {player_val}\nDealer: **{dealer_hand[0]} | ?**\n\nWhat do you do?",
+        description=f"Your hand: **{player_val}**\nDealer: **?**\n\nWhat do you do?",
         color=discord.Color.blue()
     )
     view = BlackjackView(user, bet, player_hand, dealer_hand, ctx.channel)
     await ctx.send(f'{user.mention}', embed=embed, view=view)
 
-
-# ============ bjinfo ==============
-
+# ============ BJINFO ============
 @bot.command()
 async def bjinfo(ctx):
     embed = discord.Embed(
@@ -1101,8 +1068,8 @@ async def bjinfo(ctx):
     )
     embed.add_field(name="💰 `!daily`", value="Collect 100-500 coins every 24 hours", inline=False)
     embed.add_field(name="💰 `!monthly`", value="Collect 2000-5000 coins every 30 days", inline=False)
-    embed.add_field(name="👛 `!balance`", value="Check your coin balance", inline=False)
-    embed.add_field(name="🃏 `!blackjack <bet>`", value="Bet coins on a blackjack game\nExample: `!blackjack 100`", inline=False)
+    embed.add_field(name="👛 `!balance` / `!bal`", value="Check your coin balance", inline=False)
+    embed.add_field(name="🃏 `!blackjack` / `!bj` <bet>", value="Bet coins on a blackjack game\nExample: `!bj 100`", inline=False)
     embed.set_footer(text="Good luck! 🎰")
     await ctx.send(embed=embed)
 
