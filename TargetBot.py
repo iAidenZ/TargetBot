@@ -447,7 +447,7 @@ async def tap_tap(ctx, user):
     rounds = 5
 
     for i in range(rounds):
-        buttons = ["🍎", "🍊", "🍌"]
+        buttons = ["🦴", "🍆", "🍑"]
         correct = random.choice(buttons)
         random.shuffle(buttons)
 
@@ -829,6 +829,257 @@ async def link(ctx):
 
     except Exception as e:
         await ctx.send(f"Error: {e}")
+
+
+        # ============ CURRENCY & BLACKJACK ============
+import json
+
+wallet = {}
+
+def get_wallet(user_id):
+    if user_id not in wallet:
+        wallet[user_id] = 0
+    return wallet[user_id]
+
+def save_wallet():
+    with open("bot_data.json", "r") as f:
+        data = json.load(f)
+    data["wallet"] = {str(k): v for k, v in wallet.items()}
+    with open("bot_data.json", "w") as f:
+        json.dump(data, f, indent=4)
+
+def load_wallet():
+    global wallet
+    if os.path.exists("bot_data.json"):
+        with open("bot_data.json", "r") as f:
+            data = json.load(f)
+            wallet = {int(k): v for k, v in data.get("wallet", {}).items()}
+
+daily_cooldown = {}
+monthly_cooldown = {}
+
+@bot.command()
+async def daily(ctx):
+    user = ctx.author
+    last_used = daily_cooldown.get(user.id)
+    if last_used:
+        elapsed = discord.utils.utcnow().timestamp() - last_used
+        if elapsed < 86400:
+            remaining = int(86400 - elapsed)
+            hours = remaining // 3600
+            minutes = (remaining % 3600) // 60
+            await ctx.send(f"⏱️ Come back in **{hours}h {minutes}m** for your daily! 💰")
+            return
+    daily_cooldown[user.id] = discord.utils.utcnow().timestamp()
+    coins = random.randint(100, 500)
+    wallet[user.id] = get_wallet(user.id) + coins
+    save_wallet()
+    embed = discord.Embed(
+        title="💰 Daily Coins!",
+        description=f"{user.mention} collected **{coins} coins**!\n\n**Balance:** {wallet[user.id]} coins",
+        color=discord.Color.gold()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def monthly(ctx):
+    user = ctx.author
+    last_used = monthly_cooldown.get(user.id)
+    if last_used:
+        elapsed = discord.utils.utcnow().timestamp() - last_used
+        if elapsed < 2592000:
+            remaining = int(2592000 - elapsed)
+            days = remaining // 86400
+            await ctx.send(f"come back in **{days} days** for your monthly! 💰")
+            return
+    monthly_cooldown[user.id] = discord.utils.utcnow().timestamp()
+    coins = random.randint(2000, 5000)
+    wallet[user.id] = get_wallet(user.id) + coins
+    save_wallet()
+    embed = discord.Embed(
+        title="💰 Monthly Coins!",
+        description=f"{user.mention} collected **{coins} coins**!\n\n**Balance:** {wallet[user.id]} coins",
+        color=discord.Color.gold()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def balance(ctx, member: discord.Member = None):
+    user = member if member else ctx.author
+    embed = discord.Embed(
+        title="Wallet",
+        description=f"{user.mention} has **{get_wallet(user.id)} coins** 💰",
+        color=discord.Color.gold()
+    )
+    await ctx.send(embed=embed)
+
+# ============ BLACKJACK ============
+def deal_card():
+    cards = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+    return random.choice(cards)
+
+def card_value(card):
+    if card in ['J', 'Q', 'K']:
+        return 10
+    elif card == 'A':
+        return 11
+    else:
+        return int(card)
+
+def hand_value(hand):
+    value = sum(card_value(c) for c in hand)
+    aces = hand.count('A')
+    while value > 21 and aces:
+        value -= 10
+        aces -= 1
+    return value
+
+def hand_display(hand):
+    return ' | '.join(hand)
+
+class BlackjackView(discord.ui.View):
+    def __init__(self, user, bet, player_hand, dealer_hand, channel):
+        super().__init__(timeout=30)
+        self.user = user
+        self.bet = bet
+        self.player_hand = player_hand
+        self.dealer_hand = dealer_hand
+        self.channel = channel
+        self.answered = False
+
+    async def on_timeout(self):
+        if self.answered:
+            return
+        for item in self.children:
+            item.disabled = True
+        await self.channel.send(f"⏱️ {self.user.mention} timed out! You lost **{self.bet} coins** 💸")
+        wallet[self.user.id] -= self.bet
+        save_wallet()
+
+    @discord.ui.button(label='Hit', style=discord.ButtonStyle.primary)
+    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("This isn't your game!", ephemeral=True)
+            return
+        self.answered = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+        self.player_hand.append(deal_card())
+        player_val = hand_value(self.player_hand)
+
+        if player_val > 21:
+            wallet[self.user.id] -= self.bet
+            save_wallet()
+            embed = discord.Embed(
+                title="BUST!",
+                description=f"Your hand: **{hand_display(self.player_hand)}** = {player_val}\n\nYou busted! Lost **{self.bet} coins** 💸\n**Balance:** {wallet[self.user.id]} coins",
+                color=discord.Color.red()
+            )
+            await self.channel.send(embed=embed)
+        elif player_val == 21:
+            await resolve_blackjack(self.channel, self.user, self.bet, self.player_hand, self.dealer_hand)
+        else:
+            embed = discord.Embed(
+                title="Blackjack",
+                description=f"Your hand: **{hand_display(self.player_hand)}** = {player_val}\nDealer: **{self.dealer_hand[0]} | ?**\n\nWhat do you do?",
+                color=discord.Color.blue()
+            )
+            view = BlackjackView(self.user, self.bet, self.player_hand, self.dealer_hand, self.channel)
+            await self.channel.send(embed=embed, view=view)
+
+    @discord.ui.button(label='Stand', style=discord.ButtonStyle.danger)
+    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("This isn't your game!", ephemeral=True)
+            return
+        self.answered = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        await resolve_blackjack(self.channel, self.user, self.bet, self.player_hand, self.dealer_hand)
+
+async def resolve_blackjack(channel, user, bet, player_hand, dealer_hand):
+    while hand_value(dealer_hand) < 17:
+        dealer_hand.append(deal_card())
+
+    player_val = hand_value(player_hand)
+    dealer_val = hand_value(dealer_hand)
+
+    if dealer_val > 21 or player_val > dealer_val:
+        wallet[user.id] += bet
+        save_wallet()
+        result = f"🏆 YOU WIN W gng! +**{bet} coins**"
+        color = discord.Color.green()
+    elif player_val == dealer_val:
+        result = f"TIE! No coins lost or gained ggs"
+        color = discord.Color.yellow()
+    else:
+        wallet[user.id] -= bet
+        save_wallet()
+        result = f" YOU LOSE LMFAO! -**{bet} coins**"
+        color = discord.Color.red()
+
+    embed = discord.Embed(
+        title="Blackjack Result",
+        description=f"Your hand: **{hand_display(player_hand)}** = {player_val}\nDealer hand: **{hand_display(dealer_hand)}** = {dealer_val}\n\n{result}\n**Balance:** {wallet[user.id]} coins",
+        color=color
+    )
+    await channel.send(embed=embed)
+
+@bot.command()
+async def blackjack(ctx, bet: int = None):
+    user = ctx.author
+    if bet is None:
+        await ctx.send("Usage: `!blackjack 100`")
+        return
+    if bet <= 0:
+        await ctx.send("Bet must be more than 0 buddy ")
+        return
+    if get_wallet(user.id) < bet:
+        await ctx.send(f"You don't have enough coins brokeass! Your balance: **{get_wallet(user.id)} coins** 💸")
+        return
+
+    player_hand = [deal_card(), deal_card()]
+    dealer_hand = [deal_card(), deal_card()]
+    player_val = hand_value(player_hand)
+
+    if player_val == 21:
+        wallet[user.id] += bet
+        save_wallet()
+        embed = discord.Embed(
+            title="BLACKJACK! 21!",
+            description=f"Your hand: **{hand_display(player_hand)}** = {player_val}\n\n🏆 INSTANT WIN! +**{bet} coins**\n**Balance:** {wallet[user.id]} coins",
+            color=discord.Color.gold()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    embed = discord.Embed(
+        title="🃏 Blackjack",
+        description=f"Your hand: **{hand_display(player_hand)}** = {player_val}\nDealer: **{dealer_hand[0]} | ?**\n\nWhat do you do?",
+        color=discord.Color.blue()
+    )
+    view = BlackjackView(user, bet, player_hand, dealer_hand, ctx.channel)
+    await ctx.send(f'{user.mention}', embed=embed, view=view)
+
+
+# ============ bjinfo ==============
+
+@bot.command()
+async def bjinfo(ctx):
+    embed = discord.Embed(
+        title="🃏 Blackjack & Currency Commands",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="💰 `!daily`", value="Collect 100-500 coins every 24 hours", inline=False)
+    embed.add_field(name="💰 `!monthly`", value="Collect 2000-5000 coins every 30 days", inline=False)
+    embed.add_field(name="👛 `!balance`", value="Check your coin balance", inline=False)
+    embed.add_field(name="🃏 `!blackjack <bet>`", value="Bet coins on a blackjack game\nExample: `!blackjack 100`", inline=False)
+    embed.set_footer(text="Good luck! 🎰")
+    await ctx.send(embed=embed)
+
 
 import os
 bot.run(os.environ.get('TOKEN'))
