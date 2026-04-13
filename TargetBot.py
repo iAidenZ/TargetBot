@@ -380,15 +380,64 @@ async def stalk(ctx, member: discord.Member = None):
     await ctx.send(embed=final)
 
 # ============ AFK ============
+# ===== AFK SYSTEM =====
+import json
+
+afk_users = {}
+
+def save_afk():
+    with open("afk.json", "w") as f:
+        json.dump(afk_users, f)
+
+def load_afk():
+    global afk_users
+    try:
+        with open("afk.json", "r") as f:
+            afk_users = json.load(f)
+            afk_users = {int(k): v for k, v in afk_users.items()}
+    except:
+        afk_users = {}
+
+load_afk()
+
+
 @bot.command()
 async def afk(ctx, *, reason="AFK"):
-    afk_users[ctx.author.id] = {"reason": reason, "time": discord.utils.utcnow()}
+    afk_users[ctx.author.id] = {
+        "reason": reason,
+        "time": str(discord.utils.utcnow())
+    }
+
+    save_afk()
+
     embed = discord.Embed(
         description=f"{ctx.author.mention} is now AFK: **{reason}**",
         color=discord.Color.light_gray()
     )
     embed.set_footer(text="They will be notified when mentioned 💤")
     await ctx.send(embed=embed)
+
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # remove AFK when user talks
+    if message.author.id in afk_users:
+        del afk_users[message.author.id]
+        save_afk()
+        await message.channel.send(f"{message.author.mention} is no longer AFK.")
+
+    # check mentions
+    for user in message.mentions:
+        if user.id in afk_users:
+            data = afk_users[user.id]
+            await message.channel.send(
+                f"{user.mention} is AFK: **{data['reason']}**"
+            )
+
+    await bot.process_commands(message)
 
 # ============= Bazooka ==============
 @bot.command()
