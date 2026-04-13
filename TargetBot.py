@@ -8,6 +8,7 @@ import string
 import time
 import base64
 import tempfile
+from urllib.parse import urlparse
 from functools import partial
 import yt_dlp
 
@@ -178,11 +179,39 @@ ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 
 def search_youtube(query):
-    ydl_opts = build_ytdl_options(default_search="ytsearch5")
+    ydl_opts = build_ytdl_options(default_search="scsearch5")
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl_search:
         info = ydl_search.extract_info(query, download=False)
         return info.get("entries", []) or []
+
+
+def is_url(value):
+    try:
+        parsed = urlparse(value)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    except Exception:
+        return False
+
+
+def is_youtube_url(value):
+    if not is_url(value):
+        return False
+
+    host = urlparse(value).netloc.lower()
+    return "youtube.com" in host or "youtu.be" in host or "music.youtube.com" in host
+
+
+def normalize_music_query(query):
+    query = query.strip()
+
+    if is_youtube_url(query):
+        return None
+
+    if is_url(query):
+        return query
+
+    return f"scsearch1:{query}"
 
 # ===== MUSIC CLASS =====
 
@@ -2067,9 +2096,14 @@ async def play(ctx, *, query):
     if voice_client is None:
         return
 
+    resolved_query = normalize_music_query(query)
+    if resolved_query is None:
+        await ctx.send("YouTube links are blocked on Railway right now. Use a song name for SoundCloud search or a non-YouTube direct link.")
+        return
+
     guild_id = ctx.guild.id
     ensure_music_state(guild_id)
-    music_queue[guild_id].append(query)
+    music_queue[guild_id].append(resolved_query)
 
     if voice_client.is_playing() or voice_client.is_paused():
         await ctx.send(f"Added to queue: **{query}**")
@@ -2102,7 +2136,12 @@ async def play_next(ctx):
         if "Sign in to confirm you're not a bot" in error_text:
             await ctx.send(
                 "Couldn't play that track because YouTube blocked the server. "
-                "Add a valid `YTDLP_COOKIES_B64` Railway variable from an exported YouTube cookies.txt file."
+                "Use a song name for SoundCloud search or a non-YouTube direct link."
+            )
+        elif "Requested format is not available" in error_text:
+            await ctx.send(
+                "Couldn't play that track from the current source. "
+                "Try a different song name, a SoundCloud link, or a direct audio link."
             )
         else:
             await ctx.send(f"Couldn't play that track: `{e}`")
@@ -2168,7 +2207,7 @@ async def search(ctx, *, query):
     try:
         results = await asyncio.get_running_loop().run_in_executor(
             None,
-            lambda: search_youtube(query)
+            lambda: search_youtube(f"scsearch5:{query}")
         )
     except Exception as e:
         await ctx.send(f"Search failed: `{e}`")
@@ -2179,7 +2218,7 @@ async def search(ctx, *, query):
         return
 
     embed = discord.Embed(
-        title=f"🔎 Search Results for: {query}",
+        title=f"🔎 SoundCloud Results for: {query}",
         color=discord.Color.blurple()
     )
 
@@ -2188,7 +2227,7 @@ async def search(ctx, *, query):
         url = item.get("webpage_url", "No URL")
         embed.add_field(name=f"{index}. {title}", value=url, inline=False)
 
-    embed.set_footer(text="Use !play with the song name or one of these links.")
+    embed.set_footer(text="Use !play with the song name or one of these SoundCloud links.")
     await ctx.send(embed=embed)
 
 
