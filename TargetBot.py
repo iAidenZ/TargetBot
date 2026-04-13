@@ -224,9 +224,7 @@ async def on_guild_join(guild):
             break
 
 
-
-# ======= HELP ========
-
+# ================ HELP ==================
 @bot.command()
 async def help(ctx):
 
@@ -239,56 +237,67 @@ async def help(ctx):
     )
 
     embed.add_field(name="💰 Economy", value=(
-        "`!daily` — Collect 500 coins every 24h\n"
-        "`!weekly` — Collect 3500 coins every 7 days\n"
-        "`!monthly` — Collect 15000 coins every 30 days\n"
+        "`!daily` — Collect coins every 24h\n"
+        "`!weekly` — Weekly reward\n"
+        "`!monthly` — Monthly reward\n"
         "`!balance` / `!bal` — Check your coin balance\n"
-        "`!transfer @user amount` — Send coins to someone\n"
-        "`!deposit amount` / `!dep` — Deposit to bank\n"
-        "`!withdraw amount` / `!wit` — Withdraw from bank\n"
-        "`!leaderboard` / `!lb` / `!rich` — See richest players\n"
+        "`!transfer @user amount` — Send coins\n"
+        "`!deposit` / `!dep` — Bank deposit\n"
+        "`!withdraw` / `!wit` — Bank withdraw\n"
+        "`!leaderboard` / `!lb` — Richest players\n"
         "`!private` / `!prv` — Hide your balance"
     ), inline=False)
 
     embed.add_field(name="🎰 Gambling", value=(
-        "`!slots amount` — Spin the slot machine\n"
-        "`!blackjack amount` / `!bj` — Play blackjack"
+        "`!slots amount` — Slot machine\n"
+        "`!blackjack` / `!bj` — Blackjack game"
     ), inline=False)
 
     embed.add_field(name="🚔 Jail / Crime", value=(
         "`!rob @user` — Try to rob someone\n"
-        "`!guard` — Respond to a guard event in jail\n"
-        "`!escape` — Try to escape from jail\n"
-        "`!bail` — Pay coins to get out of jail"
+        "`!guard` — Jail guard event\n"
+        "`!escape` — Escape jail\n"
+        "`!bail` — Pay to get out"
     ), inline=False)
 
     embed.add_field(name="🎮 Minigames", value=(
-        "`!jerk` — Tap tap minigame to earn XP\n"
-        "`!bazooka @user` — Type a word fast to shoot someone"
+        "`!jerk` — Tap XP game\n"
+        "`!bazooka @user` — Reaction fight game"
     ), inline=False)
 
     embed.add_field(name="💘 Social / Fun", value=(
-        "`!ship` — Calculate compatibility between two people\n"
-        "`!date` — Send a date request to a random member\n"
-        "`!stalk` — Creepy stalk sequence on a random member\n"
-        "`!gay` — Spin a wheel to pick who's gay today\n"
-        "`!wanted` — Generate a wanted poster for a random member\n"
-        "`!expose @accomplice @victim` — Team up to expose someone"
+        "`!ship` — Compatibility\n"
+        "`!date` — Random date\n"
+        "`!stalk` — Creepy message event\n"
+        "`!gay` — Random picker\n"
+        "`!wanted` — Wanted poster\n"
+        "`!expose @a @b` — Expose someone"
     ), inline=False)
 
     embed.add_field(name="🕵️ Utility", value=(
-        "`!entity` — Supernatural scan on a member (10min cooldown)\n"
-        "`!afk reason` — Set yourself as AFK\n"
-        "`!ping @user times` — Spam ping someone (owner only)\n"
-        "`!link` — Get the full commands website"
+        "`!entity` — Scan system\n"
+        "`!afk reason` — Set AFK\n"
+        "`!ping @user times` — Spam ping (owner)\n"
+        "`!link` — Website commands"
     ), inline=False)
 
-    embed.set_footer(text="Use !link for the full commands website! 🔥")
+    embed.add_field(name="🎧 Music", value=(
+        "`!join` — Join voice channel\n"
+        "`!leave` — Leave voice\n"
+        "`!play <song/url>` — Play music or add to queue\n"
+        "`!search <query>` — Search YouTube (no link needed)\n"
+        "`!skip` — Skip current song\n"
+        "`!stop` — Stop music"
+    ), inline=False)
+
+    embed.set_footer(text="Use !link for full website commands 🔥")
 
     try:
         await ctx.author.send(embed=embed)
     except discord.Forbidden:
         await ctx.send(embed=embed, delete_after=30)
+
+
 
 
 # ======= AVATAR =========
