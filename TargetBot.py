@@ -6,6 +6,7 @@ import json
 import os
 import string
 import time
+from functools import partial
 import yt_dlp
 
 DATA_FILE = "/app/data/data.json"
@@ -110,31 +111,32 @@ async def on_ready():
 # ===== MUSIC SYSTEM CONFIG =====
 
 ytdl_format_options = {
-    'format': 'bestaudio/best',
-    'noplaylist': True,
-    'quiet': True,
+    "format": "bestaudio/best",
+    "noplaylist": True,
+    "quiet": True,
+    "default_search": "auto",
+    "source_address": "0.0.0.0",
 }
 
 ffmpeg_options = {
-    'options': '-vn'
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+    "options": "-vn",
 }
+
+ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 
 def search_youtube(query):
     ydl_opts = {
-        'format': 'bestaudio',
-        'noplaylist': True,
-        'quiet': True,
-        'default_search': 'ytsearch5',
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "quiet": True,
+        "default_search": "ytsearch5",
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(query, download=False)
-
-        if "entries" not in info:
-            return []
-
-        return info["entries"]
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl_search:
+        info = ydl_search.extract_info(query, download=False)
+        return info.get("entries", []) or []
 
 # ===== MUSIC CLASS =====
 
@@ -142,19 +144,23 @@ class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
         self.data = data
-        self.title = data.get("title")
+        self.title = data.get("title", "Unknown title")
+        self.webpage_url = data.get("webpage_url")
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=True):
-        loop = loop or asyncio.get_event_loop()
+        loop = loop or asyncio.get_running_loop()
 
         data = await loop.run_in_executor(
             None,
-            lambda: ytdl.extract_info(url, download=not stream)
+            partial(ytdl.extract_info, url, download=not stream)
         )
 
         if "entries" in data:
-            data = data["entries"][0]
+            entries = [entry for entry in data["entries"] if entry]
+            if not entries:
+                raise ValueError("No results found.")
+            data = entries[0]
 
         filename = data["url"] if stream else ytdl.prepare_filename(data)
 
@@ -1942,83 +1948,185 @@ async def leaderboard(ctx):
 
 # ===== MUSIC COMMANDS =====
 
+def ensure_music_state(guild_id):
+    music_queue.setdefault(guild_id, [])
+    music_now.setdefault(guild_id, None)
+
+
+async def ensure_voice(ctx):
+    if ctx.author.voice is None or ctx.author.voice.channel is None:
+        await ctx.send("Join a voice channel first.")
+        return None
+
+    voice_client = ctx.voice_client
+    target_channel = ctx.author.voice.channel
+
+    if voice_client is None:
+        voice_client = await target_channel.connect()
+    elif voice_client.channel != target_channel:
+        await voice_client.move_to(target_channel)
+
+    return voice_client
+
 @bot.command()
 async def join(ctx):
-    if ctx.author.voice is None:
-        return await ctx.send("Join a voice channel first.")
-
-    channel = ctx.author.voice.channel
-
-    if ctx.voice_client is not None:
-        return await ctx.voice_client.move_to(channel)
-
-    await channel.connect()
+    voice_client = await ensure_voice(ctx)
+    if voice_client is not None:
+        await ctx.send(f"Joined **{voice_client.channel.name}**.")
 
 
 @bot.command()
 async def leave(ctx):
     if ctx.voice_client:
+        guild_id = ctx.guild.id
+        ensure_music_state(guild_id)
+        music_queue[guild_id].clear()
+        music_now[guild_id] = None
         await ctx.voice_client.disconnect()
+        await ctx.send("Left the voice channel.")
     else:
         await ctx.send("I'm not in a voice channel.")
 
 
 @bot.command()
 async def stop(ctx):
-    if ctx.voice_client:
-        ctx.voice_client.stop()
-        await ctx.send("Stopped music.")
-    else:
+    if ctx.voice_client is None:
         await ctx.send("Nothing is playing.")
+        return
+
+    guild_id = ctx.guild.id
+    ensure_music_state(guild_id)
+    music_queue[guild_id].clear()
+    music_now[guild_id] = None
+
+    if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+        ctx.voice_client.stop()
+
+    await ctx.send("Stopped music and cleared the queue.")
 
 
 @bot.command()
-async def play(ctx, *, url):
-    if ctx.author.voice is None:
-        return await ctx.send("Join a voice channel first.")
-
-    if ctx.voice_client is None:
-        await ctx.author.voice.channel.connect()
+async def play(ctx, *, query):
+    voice_client = await ensure_voice(ctx)
+    if voice_client is None:
+        return
 
     guild_id = ctx.guild.id
+    ensure_music_state(guild_id)
+    music_queue[guild_id].append(query)
 
-    if guild_id not in music_queue:
-        music_queue[guild_id] = []
-
-    music_queue[guild_id].append(url)
-
-    if ctx.voice_client.is_playing():
-        return await ctx.send("Added to queue 🎶")
+    if voice_client.is_playing() or voice_client.is_paused():
+        await ctx.send(f"Added to queue: **{query}**")
+        return
 
     await play_next(ctx)
 
 
 async def play_next(ctx):
-    guild = ctx.guild
+    guild_id = ctx.guild.id
+    ensure_music_state(guild_id)
 
-    if guild.id not in music_queue or len(music_queue[guild.id]) == 0:
-        music_now[guild.id] = None
+    voice_client = ctx.guild.voice_client
+    if voice_client is None:
+        music_now[guild_id] = None
+        music_queue[guild_id].clear()
         return
 
-    url = music_queue[guild.id].pop(0)
+    if not music_queue[guild_id]:
+        music_now[guild_id] = None
+        return
 
-    player = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
-    music_now[guild.id] = player
+    next_query = music_queue[guild_id].pop(0)
 
-    ctx.voice_client.play(
-        player,
-        after=lambda e: bot.loop.create_task(play_next(ctx))
-    )
+    try:
+        player = await YTDLSource.from_url(next_query, loop=bot.loop, stream=True)
+    except Exception as e:
+        music_now[guild_id] = None
+        await ctx.send(f"Couldn't play that track: `{e}`")
+        await play_next(ctx)
+        return
+
+    music_now[guild_id] = player
+
+    def after_play(error):
+        if error:
+            print(f"Player error: {error}")
+        bot.loop.call_soon_threadsafe(lambda: bot.loop.create_task(play_next(ctx)))
+
+    voice_client.play(player, after=after_play)
 
     await ctx.send(f"🎶 Now playing: **{player.title}**")
 
 @bot.command()
 async def skip(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
+    if ctx.voice_client and (ctx.voice_client.is_playing() or ctx.voice_client.is_paused()):
         ctx.voice_client.stop()
         await ctx.send("⏭️ Skipped.")
     else:
-        await ctx.send("Nothing is playing.")    
+        await ctx.send("Nothing is playing.")
+
+
+@bot.command()
+async def queue(ctx):
+    guild_id = ctx.guild.id
+    ensure_music_state(guild_id)
+
+    if not music_queue[guild_id]:
+        await ctx.send("The queue is empty.")
+        return
+
+    lines = []
+    for index, item in enumerate(music_queue[guild_id][:10], start=1):
+        lines.append(f"{index}. {item}")
+
+    embed = discord.Embed(
+        title="🎵 Music Queue",
+        description="\n".join(lines),
+        color=discord.Color.blurple()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+async def np(ctx):
+    guild_id = ctx.guild.id
+    ensure_music_state(guild_id)
+    current = music_now.get(guild_id)
+
+    if current is None:
+        await ctx.send("Nothing is playing right now.")
+        return
+
+    await ctx.send(f"🎶 Now playing: **{current.title}**")
+
+
+@bot.command()
+async def search(ctx, *, query):
+    try:
+        results = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: search_youtube(query)
+        )
+    except Exception as e:
+        await ctx.send(f"Search failed: `{e}`")
+        return
+
+    if not results:
+        await ctx.send("No results found.")
+        return
+
+    embed = discord.Embed(
+        title=f"🔎 Search Results for: {query}",
+        color=discord.Color.blurple()
+    )
+
+    for index, item in enumerate(results[:5], start=1):
+        title = item.get("title", "Unknown title")
+        url = item.get("webpage_url", "No URL")
+        embed.add_field(name=f"{index}. {title}", value=url, inline=False)
+
+    embed.set_footer(text="Use !play with the song name or one of these links.")
+    await ctx.send(embed=embed)
 
 
 
