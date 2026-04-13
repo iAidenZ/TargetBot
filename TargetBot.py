@@ -233,6 +233,22 @@ async def help(ctx):
     except discord.Forbidden:
         await ctx.send(embed=embed, delete_after=30)
 
+
+# ======= AVATAR =========
+
+@bot.command(aliases=["av"])
+async def avatar(ctx, member: discord.Member = None):
+    member = member or ctx.author
+
+    embed = discord.Embed(
+        title=f"{member.name}'s Avatar",
+        color=discord.Color.blurple()
+    )
+    embed.set_image(url=member.display_avatar.url)
+
+    await ctx.send(embed=embed)
+        
+
 # ============ WANTED ============
 @bot.command()
 async def wanted(ctx):
@@ -437,7 +453,7 @@ async def on_message(message):
                 f"{user.mention} is AFK: **{data['reason']}**"
             )
 
-    await bot.process_commands(message)
+    await bot.process_commands(message)    
 
 # ============= Bazooka ==============
 @bot.command()
