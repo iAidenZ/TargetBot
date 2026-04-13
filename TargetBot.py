@@ -1961,10 +1961,20 @@ async def ensure_voice(ctx):
     voice_client = ctx.voice_client
     target_channel = ctx.author.voice.channel
 
-    if voice_client is None:
-        voice_client = await target_channel.connect()
-    elif voice_client.channel != target_channel:
-        await voice_client.move_to(target_channel)
+    try:
+        if voice_client is None:
+            voice_client = await target_channel.connect()
+        elif voice_client.channel != target_channel:
+            await voice_client.move_to(target_channel)
+    except discord.Forbidden:
+        await ctx.send("I don't have permission to join or speak in that voice channel.")
+        return None
+    except discord.ClientException as e:
+        await ctx.send(f"Voice connection error: `{e}`")
+        return None
+    except Exception as e:
+        await ctx.send(f"Couldn't join the voice channel: `{e}`")
+        return None
 
     return voice_client
 
