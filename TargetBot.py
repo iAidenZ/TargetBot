@@ -1062,8 +1062,8 @@ async def ping(ctx, member: discord.Member = None, times: int = 3):
 # ================== LINK COMMAND ==================
 
 
-@bot.command(name="link")
-async def link(ctx):
+@bot.command(aliases=["cmds"])
+async def commands(ctx):
     try:
         website_url = "https://unblended-paralyze-cursor.ngrok-free.dev"
 
