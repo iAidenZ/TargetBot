@@ -119,9 +119,6 @@ ffmpeg_options = {
     'options': '-vn'
 }
 
-with yt_dlp.YoutubeDL(ytdl_format_options) as ydl:
-    info = ydl.extract_info(query, download=False)
-
 
 def search_youtube(query):
     ydl_opts = {
