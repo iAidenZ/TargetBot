@@ -104,6 +104,68 @@ async def on_ready():
     print(f"Logged as {bot.user}")
 
 
+# ======= ON JOIN =========
+@bot.event
+async def on_guild_join(guild):
+    embed = discord.Embed(
+        title="👋 Wsg Yall, I'm TargetBot i was made by Aiden",
+        description="Here's everything I can do:",
+        color=discord.Color.blurple()
+    )
+
+    embed.add_field(name="💰 Economy", value=(
+        "`!balance` / `!bal @user`\n"
+        "`!daily`\n"
+        "`!weekly`\n"
+        "`!monthly`\n"
+        "`!transfer @user amount`\n"
+        "`!deposit amount` / `!dep`\n"
+        "`!withdraw amount` / `!wit`\n"
+        "`!leaderboard` / `!lb` / `!rich`\n"
+        "`!prv` / `!private` (hide balance)"
+    ), inline=False)
+
+    embed.add_field(name="🎰 Gambling", value=(
+        "`!slots amount`\n"
+        "`!blackjack amount` / `!bj`"
+    ), inline=False)
+
+    embed.add_field(name="🚔 Jail / Crime System", value=(
+        "`!rob @user`\n"
+        "`!guard`\n"
+        "`!escape`\n"
+        "`!bail`"
+    ), inline=False)
+
+    embed.add_field(name="🎮 Minigames", value=(
+        "`!jerk`\n"
+        "`!bazooka @user`"
+    ), inline=False)
+
+    embed.add_field(name="💘 Social / Fun", value=(
+        "`!ship`\n"
+        "`!date`\n"
+        "`!stalk`\n"
+        "`!gay`\n"
+        "`!wanted`"
+    ), inline=False)
+
+    embed.add_field(name="🕵️ Utility / Admin", value=(
+        "`!entity`\n"
+        "`!expose @accomplice @victim`\n"
+        "`!ping @user times` (owner only)\n"
+        "`!afk reason`\n"
+        "`!link`"
+    ), inline=False)
+
+    embed.set_footer(text="Use !link for the full commands website!")
+
+    for channel in guild.text_channels:
+        if channel.permissions_for(guild.me).send_messages:
+            await channel.send(embed=embed)
+            break
+
+
 # ============ WANTED ============
 @bot.command()
 async def wanted(ctx):
@@ -1676,7 +1738,6 @@ async def leaderboard(ctx):
 
     embed.description = desc
     embed.set_footer(text="based on wallet balance 💰")
-    
 
     await ctx.send(embed=embed)
 
