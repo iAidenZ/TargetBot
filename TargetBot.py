@@ -170,7 +170,7 @@ async def on_guild_join(guild):
 
 # ======= HELP ========
 
-@bot.command
+@bot.command()
 async def help(ctx):
 
     await ctx.message.delete()
