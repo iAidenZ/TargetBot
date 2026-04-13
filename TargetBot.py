@@ -108,7 +108,7 @@ async def on_ready():
 @bot.event
 async def on_guild_join(guild):
     embed = discord.Embed(
-        title="👋 Wsg Yall, I'm TargetBot i was made by Aiden",
+        title="👋 Wsg Yall, I'm TargetBot",
         description="Here's everything I can do:",
         color=discord.Color.blurple()
     )
