@@ -6,9 +6,12 @@ import json
 import os
 import string
 import time
+import yt_dlp
 
 DATA_FILE = "/app/data/data.json"
 
+music_queue = {}
+music_now = {}
 private_bal = {}
 jail_troll_tasks = {}
 jail_guard_active = {}
@@ -102,6 +105,63 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 async def on_ready():
     load_data()
     print(f"Logged as {bot.user}")
+
+
+# ===== MUSIC SYSTEM CONFIG =====
+
+ytdl_format_options = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+}
+
+ffmpeg_options = {
+    'options': '-vn'
+}
+
+with yt_dlp.YoutubeDL(ytdl_format_options) as ydl:
+    info = ydl.extract_info(query, download=False)
+
+
+def search_youtube(query):
+    ydl_opts = {
+        'format': 'bestaudio',
+        'noplaylist': True,
+        'quiet': True,
+        'default_search': 'ytsearch5',
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(query, download=False)
+
+        if "entries" not in info:
+            return []
+
+        return info["entries"]
+
+# ===== MUSIC CLASS =====
+
+class YTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+        self.data = data
+        self.title = data.get("title")
+
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=True):
+        loop = loop or asyncio.get_event_loop()
+
+        data = await loop.run_in_executor(
+            None,
+            lambda: ytdl.extract_info(url, download=not stream)
+        )
+
+        if "entries" in data:
+            data = data["entries"][0]
+
+        filename = data["url"] if stream else ytdl.prepare_filename(data)
+
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
 
 # ======= ON JOIN =========
@@ -1873,6 +1933,89 @@ async def leaderboard(ctx):
 
     await ctx.send(embed=embed)
 
-    
+
+# ===== MUSIC COMMANDS =====
+
+@bot.command()
+async def join(ctx):
+    if ctx.author.voice is None:
+        return await ctx.send("Join a voice channel first.")
+
+    channel = ctx.author.voice.channel
+
+    if ctx.voice_client is not None:
+        return await ctx.voice_client.move_to(channel)
+
+    await channel.connect()
+
+
+@bot.command()
+async def leave(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+    else:
+        await ctx.send("I'm not in a voice channel.")
+
+
+@bot.command()
+async def stop(ctx):
+    if ctx.voice_client:
+        ctx.voice_client.stop()
+        await ctx.send("Stopped music.")
+    else:
+        await ctx.send("Nothing is playing.")
+
+
+@bot.command()
+async def play(ctx, *, url):
+    if ctx.author.voice is None:
+        return await ctx.send("Join a voice channel first.")
+
+    if ctx.voice_client is None:
+        await ctx.author.voice.channel.connect()
+
+    guild_id = ctx.guild.id
+
+    if guild_id not in music_queue:
+        music_queue[guild_id] = []
+
+    music_queue[guild_id].append(url)
+
+    if ctx.voice_client.is_playing():
+        return await ctx.send("Added to queue 🎶")
+
+    await play_next(ctx)
+
+
+async def play_next(ctx):
+    guild = ctx.guild
+
+    if guild.id not in music_queue or len(music_queue[guild.id]) == 0:
+        music_now[guild.id] = None
+        return
+
+    url = music_queue[guild.id].pop(0)
+
+    player = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
+    music_now[guild.id] = player
+
+    ctx.voice_client.play(
+        player,
+        after=lambda e: bot.loop.create_task(play_next(ctx))
+    )
+
+    await ctx.send(f"🎶 Now playing: **{player.title}**")
+
+@bot.command()
+async def skip(ctx):
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
+        await ctx.send("⏭️ Skipped.")
+    else:
+        await ctx.send("Nothing is playing.")    
+
+
+
+# =========== TOKEN ==============
 
 bot.run(os.environ.get("TOKEN"))
