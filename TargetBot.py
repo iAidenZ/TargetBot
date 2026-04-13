@@ -155,6 +155,7 @@ async def on_guild_join(guild):
         "`!expose @accomplice @victim`\n"
         "`!ping @user times` (owner only)\n"
         "`!afk reason`\n"
+        "`!help`\n"
         "`!link`"
     ), inline=False)
 
@@ -165,6 +166,72 @@ async def on_guild_join(guild):
             await channel.send(embed=embed)
             break
 
+
+
+# ======= HELP ========
+
+@bot.command
+async def help(ctx):
+
+    await ctx.message.delete()
+
+    embed = discord.Embed(
+        title="📋 TargetBot Commands",
+        description="Here's everything I can do!",
+        color=discord.Color.blurple()
+    )
+
+    embed.add_field(name="💰 Economy", value=(
+        "`!daily` — Collect 500 coins every 24h\n"
+        "`!weekly` — Collect 3500 coins every 7 days\n"
+        "`!monthly` — Collect 15000 coins every 30 days\n"
+        "`!balance` / `!bal` — Check your coin balance\n"
+        "`!transfer @user amount` — Send coins to someone\n"
+        "`!deposit amount` / `!dep` — Deposit to bank\n"
+        "`!withdraw amount` / `!wit` — Withdraw from bank\n"
+        "`!leaderboard` / `!lb` / `!rich` — See richest players\n"
+        "`!private` / `!prv` — Hide your balance"
+    ), inline=False)
+
+    embed.add_field(name="🎰 Gambling", value=(
+        "`!slots amount` — Spin the slot machine\n"
+        "`!blackjack amount` / `!bj` — Play blackjack"
+    ), inline=False)
+
+    embed.add_field(name="🚔 Jail / Crime", value=(
+        "`!rob @user` — Try to rob someone\n"
+        "`!guard` — Respond to a guard event in jail\n"
+        "`!escape` — Try to escape from jail\n"
+        "`!bail` — Pay coins to get out of jail"
+    ), inline=False)
+
+    embed.add_field(name="🎮 Minigames", value=(
+        "`!jerk` — Tap tap minigame to earn XP\n"
+        "`!bazooka @user` — Type a word fast to shoot someone"
+    ), inline=False)
+
+    embed.add_field(name="💘 Social / Fun", value=(
+        "`!ship` — Calculate compatibility between two people\n"
+        "`!date` — Send a date request to a random member\n"
+        "`!stalk` — Creepy stalk sequence on a random member\n"
+        "`!gay` — Spin a wheel to pick who's gay today\n"
+        "`!wanted` — Generate a wanted poster for a random member\n"
+        "`!expose @accomplice @victim` — Team up to expose someone"
+    ), inline=False)
+
+    embed.add_field(name="🕵️ Utility", value=(
+        "`!entity` — Supernatural scan on a member (10min cooldown)\n"
+        "`!afk reason` — Set yourself as AFK\n"
+        "`!ping @user times` — Spam ping someone (owner only)\n"
+        "`!link` — Get the full commands website"
+    ), inline=False)
+
+    embed.set_footer(text="Use !link for the full commands website! 🔥")
+
+    try:
+        await ctx.author.send(embed=embed)
+    except discord.Forbidden:
+        await ctx.send(embed=embed, delete_after=30)
 
 # ============ WANTED ============
 @bot.command()
@@ -867,7 +934,7 @@ async def ping(ctx, member: discord.Member = None, times: int = 3):
 @bot.command(name="link")
 async def link(ctx):
     try:
-        website_url = "https://iaidenz.pythonanywhere.com/track"
+        website_url = "https://unblended-paralyze-cursor.ngrok-free.dev"
 
         embed = discord.Embed(
             title="TargetBot Commands List",
