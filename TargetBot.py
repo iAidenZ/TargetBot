@@ -356,22 +356,26 @@ async def help(ctx):
     ), inline=False)
 
     embed.add_field(name="🕵️ Utility", value=(
+        "`!help` — Show this help menu\n"
+        "`!avatar` / `!av` — Show avatar\n"
         "`!entity` — Scan system\n"
         "`!afk reason` — Set AFK\n"
         "`!ping @user times` — Spam ping (owner)\n"
-        "`!link` — Website commands"
+        "`!commands` / `!cmds` — Website commands"
     ), inline=False)
 
     embed.add_field(name="🎧 Music", value=(
         "`!join` — Join voice channel\n"
         "`!leave` — Leave voice\n"
-        "`!play <song/url>` — Play music or add to queue\n"
-        "`!search <query>` — Search YouTube (no link needed)\n"
+        "`!play <song/link>` — Play music or add to queue\n"
+        "`!search <query>` — Search SoundCloud\n"
         "`!skip` — Skip current song\n"
-        "`!stop` — Stop music"
+        "`!stop` — Stop music and clear queue\n"
+        "`!queue` — Show queued songs\n"
+        "`!np` — Show current song"
     ), inline=False)
 
-    embed.set_footer(text="Use !link for full website commands 🔥")
+    embed.set_footer(text="Use !commands for the commands website 🔥")
 
     try:
         await ctx.author.send(embed=embed)
