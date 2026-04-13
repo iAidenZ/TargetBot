@@ -246,8 +246,12 @@ class YTDLSource(discord.PCMVolumeTransformer):
 @bot.event
 async def on_guild_join(guild):
     embed = discord.Embed(
-        title="👋 Wsg Yall, I'm TargetBot",
-        description="Here's everything I can do:",
+        title="👋 Hi, I'm TargetBot",
+        description=(
+            "Thanks for adding me to your server.\n"
+            "I can handle economy, fun, jail, minigames, and music commands.\n\n"
+            "If you need help, use `!commands`, `!cmds`, or `!help`."
+        ),
         color=discord.Color.blurple()
     )
 
@@ -294,10 +298,10 @@ async def on_guild_join(guild):
         "`!ping @user times` (owner only)\n"
         "`!afk reason`\n"
         "`!help`\n"
-        "`!link`"
+        "`!commands` / `!cmds`"
     ), inline=False)
 
-    embed.set_footer(text="Use !link for the full commands website!")
+    embed.set_footer(text="Need help? Use !commands, !cmds, or !help.")
 
     for channel in guild.text_channels:
         if channel.permissions_for(guild.me).send_messages:
