@@ -144,11 +144,16 @@ def setup_ytdlp_cookie_file():
 
 def build_ytdl_options(default_search="auto"):
     options = {
-        "format": "bestaudio/best",
+        "format": "bestaudio[protocol=m3u8_native]/bestaudio[protocol=m3u8]/bestaudio/best",
         "noplaylist": True,
         "quiet": True,
         "default_search": default_search,
         "source_address": "0.0.0.0",
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web_safari", "web"],
+            }
+        },
     }
 
     user_agent = os.environ.get("YTDLP_USER_AGENT")
