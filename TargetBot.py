@@ -6,6 +6,8 @@ import json
 import os
 import string
 import time
+import base64
+import tempfile
 from functools import partial
 import yt_dlp
 
@@ -110,13 +112,57 @@ async def on_ready():
 
 # ===== MUSIC SYSTEM CONFIG =====
 
-ytdl_format_options = {
-    "format": "bestaudio/best",
-    "noplaylist": True,
-    "quiet": True,
-    "default_search": "auto",
-    "source_address": "0.0.0.0",
-}
+YTDLP_COOKIE_FILE = None
+
+
+def setup_ytdlp_cookie_file():
+    global YTDLP_COOKIE_FILE
+
+    cookie_path = os.environ.get("YTDLP_COOKIES_FILE")
+    cookie_b64 = os.environ.get("YTDLP_COOKIES_B64")
+
+    if cookie_path and os.path.exists(cookie_path):
+        YTDLP_COOKIE_FILE = cookie_path
+        return
+
+    if not cookie_b64:
+        return
+
+    try:
+        cookie_bytes = base64.b64decode(cookie_b64)
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, "targetbot_cookies.txt")
+
+        with open(temp_path, "wb") as cookie_file:
+            cookie_file.write(cookie_bytes)
+
+        YTDLP_COOKIE_FILE = temp_path
+        print("Loaded yt-dlp cookies from YTDLP_COOKIES_B64")
+    except Exception as e:
+        print(f"Failed to load yt-dlp cookies: {e}")
+
+
+def build_ytdl_options(default_search="auto"):
+    options = {
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "quiet": True,
+        "default_search": default_search,
+        "source_address": "0.0.0.0",
+    }
+
+    user_agent = os.environ.get("YTDLP_USER_AGENT")
+    if user_agent:
+        options["http_headers"] = {"User-Agent": user_agent}
+
+    if YTDLP_COOKIE_FILE:
+        options["cookiefile"] = YTDLP_COOKIE_FILE
+
+    return options
+
+setup_ytdlp_cookie_file()
+
+ytdl_format_options = build_ytdl_options()
 
 ffmpeg_options = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
@@ -127,12 +173,7 @@ ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 
 def search_youtube(query):
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "noplaylist": True,
-        "quiet": True,
-        "default_search": "ytsearch5",
-    }
+    ydl_opts = build_ytdl_options(default_search="ytsearch5")
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl_search:
         info = ydl_search.extract_info(query, download=False)
@@ -2052,7 +2093,14 @@ async def play_next(ctx):
         player = await YTDLSource.from_url(next_query, loop=bot.loop, stream=True)
     except Exception as e:
         music_now[guild_id] = None
-        await ctx.send(f"Couldn't play that track: `{e}`")
+        error_text = str(e)
+        if "Sign in to confirm you're not a bot" in error_text:
+            await ctx.send(
+                "Couldn't play that track because YouTube blocked the server. "
+                "Add a valid `YTDLP_COOKIES_B64` Railway variable from an exported YouTube cookies.txt file."
+            )
+        else:
+            await ctx.send(f"Couldn't play that track: `{e}`")
         await play_next(ctx)
         return
 
