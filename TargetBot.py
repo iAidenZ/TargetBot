@@ -550,9 +550,9 @@ async def stalk(ctx, member: discord.Member = None):
     await asyncio.sleep(3)
     await ctx.send(embed=final)
 
-# ============ AFK ============
 # ===== AFK SYSTEM =====
 import json
+from datetime import datetime, timezone
 
 afk_users = {}
 
@@ -594,13 +594,29 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # remove AFK when user talks
     if message.author.id in afk_users:
-        del afk_users[message.author.id]
+        data = afk_users.pop(message.author.id)
         save_afk()
-        await message.channel.send(f"{message.author.mention} is no longer AFK.")
 
-    # check mentions
+        try:
+            afk_time = datetime.fromisoformat(data["time"])
+            now = datetime.now(timezone.utc)
+            diff = now - afk_time
+            total_minutes = int(diff.total_seconds() // 60)
+            hours = total_minutes // 60
+            minutes = total_minutes % 60
+
+            if hours > 0:
+                time_str = f"**{hours}h {minutes}m**"
+            elif minutes > 0:
+                time_str = f"**{minutes}m**"
+            else:
+                time_str = "**less than a minute**"
+
+            await message.channel.send(f"Welcome back {message.author.mention}! You were AFK for {time_str} 👋")
+        except:
+            await message.channel.send(f"{message.author.mention} is no longer AFK.")
+
     for user in message.mentions:
         if user.id in afk_users:
             data = afk_users[user.id]
@@ -608,7 +624,7 @@ async def on_message(message):
                 f"{user.mention} is AFK: **{data['reason']}**"
             )
 
-    await bot.process_commands(message)    
+    await bot.process_commands(message)
 
 # ============= Bazooka ==============
 @bot.command()
