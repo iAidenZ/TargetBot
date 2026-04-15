@@ -241,6 +241,44 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
+    
+# ===== LYRICS SYSTEM =====
+
+import requests
+
+@bot.command()
+async def lyrics(ctx):
+    guild = ctx.guild
+
+    if guild.id not in music_now or music_now[guild.id] is None:
+        return await ctx.send("❌ Nothing is playing right now.")
+
+    title = music_now[guild.id].title
+
+    await ctx.send(f"🔍 Searching lyrics for: **{title}**")
+
+    try:
+        parts = title.split(" - ")
+
+        artist = parts[0] if len(parts) > 1 else "unknown"
+        song = parts[-1]
+
+        url = f"https://api.lyrics.ovh/v1/{artist}/{song}"
+        r = requests.get(url).json()
+
+        if "lyrics" not in r:
+            return await ctx.send("❌ Lyrics not found.")
+
+        lyrics = r["lyrics"]
+
+        if len(lyrics) > 2000:
+            lyrics = lyrics[:1990] + "..."
+
+        await ctx.send(f"🎤 **Lyrics for {title}:**\n```{lyrics}```")
+
+    except:
+        await ctx.send("❌ Error getting lyrics.")    
+
 
 # ======= ON JOIN =========
 @bot.event
@@ -624,7 +662,7 @@ async def on_message(message):
                 f"{user.mention} is AFK: **{data['reason']}**"
             )
 
-    await bot.process_commands(message)
+    await bot.process_commands(message)and nga
 
 # ============= Bazooka ==============
 @bot.command()
