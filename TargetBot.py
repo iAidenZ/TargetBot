@@ -2293,6 +2293,37 @@ async def search(ctx, *, query):
     await ctx.send(embed=embed)
 
 
+# ============ BLACKLIST ============
+blacklisted = set()
+
+@bot.command(aliases=["bl"])
+async def blacklist(ctx, member: discord.Member = None):
+    if ctx.author.id != OWNER_ID:
+        return
+    if member is None:
+        await ctx.send("Tag someone! `!bl @user`")
+        return
+    blacklisted.add(member.id)
+    await ctx.send(f"🚫 {member.mention} has been blacklisted.")
+
+@bot.command(aliases=["wl"])
+async def whitelist(ctx, member: discord.Member = None):
+    if ctx.author.id != OWNER_ID:
+        return
+    if member is None:
+        await ctx.send("Tag someone! `!wl @user`")
+        return
+    blacklisted.discard(member.id)
+    await ctx.send(f"✅ {member.mention} has been whitelisted.")
+
+@bot.check
+async def check_blacklist(ctx):
+    if ctx.author.id in blacklisted:
+        await ctx.send(f"🚫 {ctx.author.mention} you are blacklisted and cannot use any commands.")
+        return False
+    return True
+
+
 
 # =========== TOKEN ==============
 
