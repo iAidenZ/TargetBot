@@ -256,6 +256,44 @@ class YTDLSource(discord.PCMVolumeTransformer):
 # ===== LYRICS SYSTEM =====
 
 import requests
+import re
+
+
+def clean_lyrics_title(text):
+    if not text:
+        return ""
+
+    cleaned = text
+    cleaned = re.sub(r"\([^)]*(official|video|audio|lyrics?|visualizer|hd|4k)[^)]*\)", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\[[^\]]*(official|video|audio|lyrics?|visualizer|hd|4k)[^\]]*\]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(official video|official audio|lyrics video|lyric video|visualizer|audio|lyrics|hd|4k)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
+    return cleaned.strip()
+
+
+def split_lyrics_chunks(text, chunk_size=1800):
+    lines = text.splitlines()
+    chunks = []
+    current = ""
+
+    for line in lines:
+        next_part = line if not current else f"{current}\n{line}"
+        if len(next_part) <= chunk_size:
+            current = next_part
+        else:
+            if current:
+                chunks.append(current)
+            if len(line) <= chunk_size:
+                current = line
+            else:
+                for i in range(0, len(line), chunk_size):
+                    chunks.append(line[i:i + chunk_size])
+                current = ""
+
+    if current:
+        chunks.append(current)
+
+    return chunks or [text[:chunk_size]]
 
 @bot.command()
 async def lyrics(ctx):
@@ -274,51 +312,89 @@ async def lyrics(ctx):
     try:
         lyrics_text = None
         found_label = title
-        search_query = f"{artist or ''} {track or title}".strip()
 
-        lrclib_url = f"https://lrclib.net/api/search?q={quote_plus(search_query)}"
-        response = requests.get(
-            lrclib_url,
-            timeout=10,
-            headers={"User-Agent": "TargetBot/1.0"}
-        )
+        cleaned_title = clean_lyrics_title(title)
+        cleaned_track = clean_lyrics_title(track or title)
+        cleaned_artist = clean_lyrics_title(artist or "")
 
-        if response.ok:
-            results = response.json()
-            if isinstance(results, list) and results:
-                best = results[0]
-                lyrics_text = best.get("plainLyrics") or best.get("syncedLyrics")
-                best_artist = best.get("artistName") or artist or "Unknown artist"
-                best_track = best.get("trackName") or track or title
-                found_label = f"{best_artist} - {best_track}"
+        search_queries = []
+        if cleaned_artist and cleaned_track:
+            search_queries.append(f"{cleaned_artist} {cleaned_track}")
+        if cleaned_title:
+            search_queries.append(cleaned_title)
+        if title not in search_queries:
+            search_queries.append(title)
 
-        if not lyrics_text:
-            parts = title.split(" - ")
-            fallback_artist = artist or (parts[0] if len(parts) > 1 else "unknown")
-            fallback_song = track or (parts[-1] if parts else title)
-            fallback_url = (
-                f"https://api.lyrics.ovh/v1/"
-                f"{quote_plus(fallback_artist)}/{quote_plus(fallback_song)}"
-            )
-            fallback_response = requests.get(
-                fallback_url,
+        for search_query in search_queries:
+            lrclib_url = f"https://lrclib.net/api/search?q={quote_plus(search_query)}"
+            response = requests.get(
+                lrclib_url,
                 timeout=10,
                 headers={"User-Agent": "TargetBot/1.0"}
             )
 
-            if fallback_response.ok:
+            if not response.ok:
+                continue
+
+            results = response.json()
+            if not isinstance(results, list) or not results:
+                continue
+
+            best = results[0]
+            lyrics_text = best.get("plainLyrics") or best.get("syncedLyrics")
+            if lyrics_text:
+                best_artist = best.get("artistName") or artist or "Unknown artist"
+                best_track = best.get("trackName") or track or title
+                found_label = f"{best_artist} - {best_track}"
+                break
+
+        if not lyrics_text:
+            title_parts = [part.strip() for part in cleaned_title.split(" - ") if part.strip()]
+            fallback_pairs = []
+
+            if cleaned_artist and cleaned_track:
+                fallback_pairs.append((cleaned_artist, cleaned_track))
+            if len(title_parts) > 1:
+                fallback_pairs.append((title_parts[0], title_parts[-1]))
+            fallback_pairs.append((artist or "unknown", track or cleaned_title or title))
+
+            seen_pairs = set()
+            for fallback_artist, fallback_song in fallback_pairs:
+                pair = (fallback_artist.strip().lower(), fallback_song.strip().lower())
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+
+                fallback_url = (
+                    f"https://api.lyrics.ovh/v1/"
+                    f"{quote_plus(fallback_artist)}/{quote_plus(fallback_song)}"
+                )
+                fallback_response = requests.get(
+                    fallback_url,
+                    timeout=10,
+                    headers={"User-Agent": "TargetBot/1.0"}
+                )
+
+                if not fallback_response.ok:
+                    continue
+
                 data = fallback_response.json()
                 if "lyrics" in data and data["lyrics"].strip():
                     lyrics_text = data["lyrics"]
                     found_label = f"{fallback_artist} - {fallback_song}"
+                    break
 
         if not lyrics_text:
             return await ctx.send("Lyrics not found.")
 
-        if len(lyrics_text) > 1900:
-            lyrics_text = lyrics_text[:1900] + "\n..."
+        chunks = split_lyrics_chunks(lyrics_text, chunk_size=1800)
 
-        await ctx.send(f"**Lyrics for {found_label}:**\n```{lyrics_text}```")
+        for index, chunk in enumerate(chunks, start=1):
+            if len(chunks) == 1:
+                header = f"**Lyrics for {found_label}:**"
+            else:
+                header = f"**Lyrics for {found_label} ({index}/{len(chunks)}):**"
+            await ctx.send(f"{header}\n```{chunk}```")
 
     except Exception as e:
         print(f"Lyrics error: {e}")
