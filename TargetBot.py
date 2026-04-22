@@ -8,7 +8,7 @@ import string
 import time
 import base64
 import tempfile
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 from functools import partial
 import yt_dlp
 
@@ -16,6 +16,9 @@ DATA_FILE = "/app/data/data.json"
 
 music_queue = {}
 music_now = {}
+music_worker_running = set()
+music_locks = {}
+recent_play_requests = {}
 private_bal = {}
 jail_troll_tasks = {}
 jail_guard_active = {}
@@ -221,6 +224,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.data = data
         self.title = data.get("title", "Unknown title")
         self.webpage_url = data.get("webpage_url")
+        self.artist = data.get("artist") or data.get("uploader") or "Unknown artist"
+        self.track = data.get("track") or data.get("alt_title") or self.title
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=True):
@@ -238,8 +243,13 @@ class YTDLSource(discord.PCMVolumeTransformer):
             data = entries[0]
 
         filename = data["url"] if stream else ytdl.prepare_filename(data)
+        source = discord.FFmpegPCMAudio(
+            filename,
+            before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+            options="-vn",
+        )
 
-        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+        return cls(source, data=data)
 
     
 # ===== LYRICS SYSTEM =====
@@ -251,34 +261,67 @@ async def lyrics(ctx):
     guild = ctx.guild
 
     if guild.id not in music_now or music_now[guild.id] is None:
-        return await ctx.send("❌ Nothing is playing right now.")
+        return await ctx.send("Nothing is playing right now.")
 
-    title = music_now[guild.id].title
+    current = music_now[guild.id]
+    title = current.title
+    artist = getattr(current, "artist", None)
+    track = getattr(current, "track", None)
 
-    await ctx.send(f"🔍 Searching lyrics for: **{title}**")
+    await ctx.send(f"Searching lyrics for: **{title}**")
 
     try:
-        parts = title.split(" - ")
+        lyrics_text = None
+        found_label = title
+        search_query = f"{artist or ''} {track or title}".strip()
 
-        artist = parts[0] if len(parts) > 1 else "unknown"
-        song = parts[-1]
+        lrclib_url = f"https://lrclib.net/api/search?q={quote_plus(search_query)}"
+        response = requests.get(
+            lrclib_url,
+            timeout=10,
+            headers={"User-Agent": "TargetBot/1.0"}
+        )
 
-        url = f"https://api.lyrics.ovh/v1/{artist}/{song}"
-        r = requests.get(url).json()
+        if response.ok:
+            results = response.json()
+            if isinstance(results, list) and results:
+                best = results[0]
+                lyrics_text = best.get("plainLyrics") or best.get("syncedLyrics")
+                best_artist = best.get("artistName") or artist or "Unknown artist"
+                best_track = best.get("trackName") or track or title
+                found_label = f"{best_artist} - {best_track}"
 
-        if "lyrics" not in r:
-            return await ctx.send("❌ Lyrics not found.")
+        if not lyrics_text:
+            parts = title.split(" - ")
+            fallback_artist = artist or (parts[0] if len(parts) > 1 else "unknown")
+            fallback_song = track or (parts[-1] if parts else title)
+            fallback_url = (
+                f"https://api.lyrics.ovh/v1/"
+                f"{quote_plus(fallback_artist)}/{quote_plus(fallback_song)}"
+            )
+            fallback_response = requests.get(
+                fallback_url,
+                timeout=10,
+                headers={"User-Agent": "TargetBot/1.0"}
+            )
 
-        lyrics = r["lyrics"]
+            if fallback_response.ok:
+                data = fallback_response.json()
+                if "lyrics" in data and data["lyrics"].strip():
+                    lyrics_text = data["lyrics"]
+                    found_label = f"{fallback_artist} - {fallback_song}"
 
-        if len(lyrics) > 2000:
-            lyrics = lyrics[:1990] + "..."
+        if not lyrics_text:
+            return await ctx.send("Lyrics not found.")
 
-        await ctx.send(f"🎤 **Lyrics for {title}:**\n```{lyrics}```")
+        if len(lyrics_text) > 1900:
+            lyrics_text = lyrics_text[:1900] + "\n..."
 
-    except:
-        await ctx.send("❌ Error getting lyrics.")    
+        await ctx.send(f"**Lyrics for {found_label}:**\n```{lyrics_text}```")
 
+    except Exception as e:
+        print(f"Lyrics error: {e}")
+        await ctx.send("Error getting lyrics.")
 
 # ======= ON JOIN =========
 @bot.event
@@ -2088,6 +2131,31 @@ async def leaderboard(ctx):
 def ensure_music_state(guild_id):
     music_queue.setdefault(guild_id, [])
     music_now.setdefault(guild_id, None)
+    music_locks.setdefault(guild_id, asyncio.Lock())
+    recent_play_requests.setdefault(guild_id, {})
+
+
+def cleanup_recent_requests(guild_id):
+    ensure_music_state(guild_id)
+    now = time.monotonic()
+    recent_play_requests[guild_id] = {
+        key: ts
+        for key, ts in recent_play_requests[guild_id].items()
+        if now - ts < 8
+    }
+
+
+def can_queue_play(guild_id, user_id, query):
+    cleanup_recent_requests(guild_id)
+    key = (user_id, query.strip().lower())
+    now = time.monotonic()
+    last = recent_play_requests[guild_id].get(key, 0)
+
+    if now - last < 3:
+        return False, round(3 - (now - last), 1)
+
+    recent_play_requests[guild_id][key] = now
+    return True, 0
 
 
 async def ensure_voice(ctx):
@@ -2129,6 +2197,7 @@ async def leave(ctx):
         ensure_music_state(guild_id)
         music_queue[guild_id].clear()
         music_now[guild_id] = None
+        music_worker_running.discard(guild_id)
         await ctx.voice_client.disconnect()
         await ctx.send("Left the voice channel.")
     else:
@@ -2152,7 +2221,84 @@ async def stop(ctx):
     await ctx.send("Stopped music and cleared the queue.")
 
 
+async def music_worker(guild, text_channel):
+    guild_id = guild.id
+    ensure_music_state(guild_id)
+
+    try:
+        while True:
+            voice_client = guild.voice_client
+
+            if voice_client is None:
+                music_queue[guild_id].clear()
+                music_now[guild_id] = None
+                return
+
+            if not music_queue[guild_id]:
+                music_now[guild_id] = None
+                return
+
+            next_query = music_queue[guild_id].pop(0)
+
+            try:
+                player = await YTDLSource.from_url(next_query, loop=bot.loop, stream=True)
+            except Exception as e:
+                music_now[guild_id] = None
+                error_text = str(e)
+                if "Sign in to confirm you're not a bot" in error_text:
+                    await text_channel.send(
+                        "Couldn't play that track because YouTube blocked the server. "
+                        "Use a song name for SoundCloud search or a non-YouTube direct link."
+                    )
+                elif "Requested format is not available" in error_text:
+                    await text_channel.send(
+                        "Couldn't play that track from the current source. "
+                        "Try a different song name, a SoundCloud link, or a direct audio link."
+                    )
+                else:
+                    await text_channel.send(f"Couldn't play that track: `{e}`")
+
+                await asyncio.sleep(0.5)
+                continue
+
+            music_now[guild_id] = player
+            finished = asyncio.Event()
+
+            def after_play(error):
+                if error:
+                    print(f"Player error: {error}")
+                bot.loop.call_soon_threadsafe(finished.set)
+
+            try:
+                voice_client.play(player, after=after_play)
+            except Exception as e:
+                music_now[guild_id] = None
+                await text_channel.send(f"Couldn't start playback: `{e}`")
+                await asyncio.sleep(0.5)
+                continue
+
+            await text_channel.send(f"Now playing: **{player.title}**")
+            await finished.wait()
+            music_now[guild_id] = None
+            await asyncio.sleep(0.4)
+
+    finally:
+        music_worker_running.discard(guild_id)
+
+
+async def start_music_worker(guild, text_channel):
+    guild_id = guild.id
+    ensure_music_state(guild_id)
+
+    if guild_id in music_worker_running:
+        return
+
+    music_worker_running.add(guild_id)
+    bot.loop.create_task(music_worker(guild, text_channel))
+
+
 @bot.command()
+@commands.cooldown(2, 5, commands.BucketType.user)
 async def play(ctx, *, query):
     voice_client = await ensure_voice(ctx)
     if voice_client is None:
@@ -2165,67 +2311,35 @@ async def play(ctx, *, query):
 
     guild_id = ctx.guild.id
     ensure_music_state(guild_id)
-    music_queue[guild_id].append(resolved_query)
 
-    if voice_client.is_playing() or voice_client.is_paused():
+    allowed, wait_time = can_queue_play(guild_id, ctx.author.id, query)
+    if not allowed:
+        await ctx.send(f"Slow down. Try again in **{wait_time}s**.")
+        return
+
+    async with music_locks[guild_id]:
+        if len(music_queue[guild_id]) >= 25:
+            await ctx.send("Queue is full right now. Try again after some songs finish.")
+            return
+
+        music_queue[guild_id].append(resolved_query)
         await ctx.send(f"Added to queue: **{query}**")
+        await start_music_worker(ctx.guild, ctx.channel)
+
+
+@play.error
+async def play_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"Slow down. Try again in **{error.retry_after:.1f}s**.")
         return
+    raise error
 
-    await play_next(ctx)
-
-
-async def play_next(ctx):
-    guild_id = ctx.guild.id
-    ensure_music_state(guild_id)
-
-    voice_client = ctx.guild.voice_client
-    if voice_client is None:
-        music_now[guild_id] = None
-        music_queue[guild_id].clear()
-        return
-
-    if not music_queue[guild_id]:
-        music_now[guild_id] = None
-        return
-
-    next_query = music_queue[guild_id].pop(0)
-
-    try:
-        player = await YTDLSource.from_url(next_query, loop=bot.loop, stream=True)
-    except Exception as e:
-        music_now[guild_id] = None
-        error_text = str(e)
-        if "Sign in to confirm you're not a bot" in error_text:
-            await ctx.send(
-                "Couldn't play that track because YouTube blocked the server. "
-                "Use a song name for SoundCloud search or a non-YouTube direct link."
-            )
-        elif "Requested format is not available" in error_text:
-            await ctx.send(
-                "Couldn't play that track from the current source. "
-                "Try a different song name, a SoundCloud link, or a direct audio link."
-            )
-        else:
-            await ctx.send(f"Couldn't play that track: `{e}`")
-        await play_next(ctx)
-        return
-
-    music_now[guild_id] = player
-
-    def after_play(error):
-        if error:
-            print(f"Player error: {error}")
-        bot.loop.call_soon_threadsafe(lambda: bot.loop.create_task(play_next(ctx)))
-
-    voice_client.play(player, after=after_play)
-
-    await ctx.send(f"🎶 Now playing: **{player.title}**")
 
 @bot.command()
 async def skip(ctx):
     if ctx.voice_client and (ctx.voice_client.is_playing() or ctx.voice_client.is_paused()):
         ctx.voice_client.stop()
-        await ctx.send("⏭️ Skipped.")
+        await ctx.send("Skipped.")
     else:
         await ctx.send("Nothing is playing.")
 
@@ -2244,7 +2358,7 @@ async def queue(ctx):
         lines.append(f"{index}. {item}")
 
     embed = discord.Embed(
-        title="🎵 Music Queue",
+        title="Music Queue",
         description="\n".join(lines),
         color=discord.Color.blurple()
     )
@@ -2261,7 +2375,7 @@ async def np(ctx):
         await ctx.send("Nothing is playing right now.")
         return
 
-    await ctx.send(f"🎶 Now playing: **{current.title}**")
+    await ctx.send(f"Now playing: **{current.title}**")
 
 
 @bot.command()
@@ -2280,7 +2394,7 @@ async def search(ctx, *, query):
         return
 
     embed = discord.Embed(
-        title=f"🔎 SoundCloud Results for: {query}",
+        title=f"SoundCloud Results for: {query}",
         color=discord.Color.blurple()
     )
 
@@ -2291,7 +2405,6 @@ async def search(ctx, *, query):
 
     embed.set_footer(text="Use !play with the song name or one of these SoundCloud links.")
     await ctx.send(embed=embed)
-
 
 # ============ BLACKLIST ============
 blacklisted = set()
@@ -2328,3 +2441,6 @@ async def check_blacklist(ctx):
 # =========== TOKEN ==============
 
 bot.run(os.environ.get("TOKEN"))
+
+
+
