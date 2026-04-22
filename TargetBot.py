@@ -17,9 +17,9 @@ DATA_FILE = "/app/data/data.json"
 
 music_queue = {}
 music_now = {}
-music_worker_running = set()
 music_locks = {}
 recent_play_requests = {}
+music_starting = set()
 private_bal = {}
 jail_troll_tasks = {}
 jail_guard_active = {}
@@ -2274,7 +2274,7 @@ async def leave(ctx):
         ensure_music_state(guild_id)
         music_queue[guild_id].clear()
         music_now[guild_id] = None
-        music_worker_running.discard(guild_id)
+        music_starting.discard(guild_id)
         await ctx.voice_client.disconnect()
         await ctx.send("Left the voice channel.")
     else:
@@ -2291,6 +2291,7 @@ async def stop(ctx):
     ensure_music_state(guild_id)
     music_queue[guild_id].clear()
     music_now[guild_id] = None
+    music_starting.discard(guild_id)
 
     if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
         ctx.voice_client.stop()
@@ -2298,80 +2299,74 @@ async def stop(ctx):
     await ctx.send("Stopped music and cleared the queue.")
 
 
-async def music_worker(guild, text_channel):
-    guild_id = guild.id
+async def play_next(ctx):
+    guild_id = ctx.guild.id
     ensure_music_state(guild_id)
 
-    try:
-        while True:
-            voice_client = guild.voice_client
-
-            if voice_client is None:
-                music_queue[guild_id].clear()
-                music_now[guild_id] = None
-                return
-
-            if not music_queue[guild_id]:
-                music_now[guild_id] = None
-                return
-
-            next_query = music_queue[guild_id].pop(0)
-
-            try:
-                player = await YTDLSource.from_url(next_query, loop=bot.loop, stream=True)
-            except Exception as e:
-                music_now[guild_id] = None
-                error_text = str(e)
-                if "Sign in to confirm you're not a bot" in error_text:
-                    await text_channel.send(
-                        "Couldn't play that track because YouTube blocked the server. "
-                        "Use a song name for SoundCloud search or a non-YouTube direct link."
-                    )
-                elif "Requested format is not available" in error_text:
-                    await text_channel.send(
-                        "Couldn't play that track from the current source. "
-                        "Try a different song name, a SoundCloud link, or a direct audio link."
-                    )
-                else:
-                    await text_channel.send(f"Couldn't play that track: `{e}`")
-
-                await asyncio.sleep(0.5)
-                continue
-
-            music_now[guild_id] = player
-            finished = asyncio.Event()
-
-            def after_play(error):
-                if error:
-                    print(f"Player error: {error}")
-                bot.loop.call_soon_threadsafe(finished.set)
-
-            try:
-                voice_client.play(player, after=after_play)
-            except Exception as e:
-                music_now[guild_id] = None
-                await text_channel.send(f"Couldn't start playback: `{e}`")
-                await asyncio.sleep(0.5)
-                continue
-
-            await text_channel.send(f"Now playing: **{player.title}**")
-            await finished.wait()
-            music_now[guild_id] = None
-            await asyncio.sleep(0.4)
-
-    finally:
-        music_worker_running.discard(guild_id)
-
-
-async def start_music_worker(guild, text_channel):
-    guild_id = guild.id
-    ensure_music_state(guild_id)
-
-    if guild_id in music_worker_running:
+    voice_client = ctx.guild.voice_client
+    if voice_client is None:
+        music_now[guild_id] = None
+        music_queue[guild_id].clear()
+        music_starting.discard(guild_id)
         return
 
-    music_worker_running.add(guild_id)
-    bot.loop.create_task(music_worker(guild, text_channel))
+    if voice_client.is_playing() or voice_client.is_paused():
+        music_starting.discard(guild_id)
+        return
+
+    if not music_queue[guild_id]:
+        music_now[guild_id] = None
+        music_starting.discard(guild_id)
+        return
+
+    next_query = music_queue[guild_id].pop(0)
+
+    try:
+        player = await YTDLSource.from_url(next_query, loop=bot.loop, stream=True)
+    except Exception as e:
+        music_now[guild_id] = None
+        music_starting.discard(guild_id)
+        error_text = str(e)
+        if "Sign in to confirm you're not a bot" in error_text:
+            await ctx.send(
+                "Couldn't play that track because YouTube blocked the server. "
+                "Use a song name for SoundCloud search or a non-YouTube direct link."
+            )
+        elif "Requested format is not available" in error_text:
+            await ctx.send(
+                "Couldn't play that track from the current source. "
+                "Try a different song name, a SoundCloud link, or a direct audio link."
+            )
+        else:
+            await ctx.send(f"Couldn't play that track: `{e}`")
+
+        if music_queue[guild_id]:
+            music_starting.add(guild_id)
+            bot.loop.create_task(play_next(ctx))
+        return
+
+    music_now[guild_id] = player
+
+    def after_play(error):
+        if error:
+            print(f"Player error: {error}")
+        music_now[guild_id] = None
+        music_starting.discard(guild_id)
+        bot.loop.call_soon_threadsafe(lambda: bot.loop.create_task(play_next(ctx)))
+
+    try:
+        voice_client.play(player, after=after_play)
+    except Exception as e:
+        music_now[guild_id] = None
+        music_starting.discard(guild_id)
+        await ctx.send(f"Couldn't start playback: `{e}`")
+        if music_queue[guild_id]:
+            music_starting.add(guild_id)
+            bot.loop.create_task(play_next(ctx))
+        return
+
+    music_starting.discard(guild_id)
+    await ctx.send(f"Now playing: **{player.title}**")
 
 
 @bot.command()
@@ -2400,8 +2395,17 @@ async def play(ctx, *, query):
             return
 
         music_queue[guild_id].append(resolved_query)
-        await ctx.send(f"Added to queue: **{query}**")
-        await start_music_worker(ctx.guild, ctx.channel)
+        if (
+            ctx.voice_client.is_playing()
+            or ctx.voice_client.is_paused()
+            or guild_id in music_starting
+        ):
+            await ctx.send(f"Added to queue: **{query}**")
+            return
+
+        music_starting.add(guild_id)
+
+    await play_next(ctx)
 
 
 @play.error
