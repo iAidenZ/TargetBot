@@ -295,6 +295,68 @@ def split_lyrics_chunks(text, chunk_size=1800):
 
     return chunks or [text[:chunk_size]]
 
+
+def build_lyrics_embed(found_label, chunks, page_index, source_url=None):
+    total_pages = len(chunks)
+    embed = discord.Embed(
+        title="Lyrics Viewer",
+        description=chunks[page_index],
+        color=discord.Color.purple()
+    )
+    embed.add_field(name="Track", value=found_label, inline=False)
+    if source_url:
+        embed.add_field(name="Source", value=f"[Open track]({source_url})", inline=False)
+    embed.set_footer(text=f"Page {page_index + 1}/{total_pages}")
+    return embed
+
+
+class LyricsPaginatorView(discord.ui.View):
+    def __init__(self, requester, found_label, chunks, source_url=None):
+        super().__init__(timeout=180)
+        self.requester = requester
+        self.found_label = found_label
+        self.chunks = chunks
+        self.source_url = source_url
+        self.page_index = 0
+        self.message = None
+        self._refresh_buttons()
+
+    def _refresh_buttons(self):
+        self.prev_button.disabled = self.page_index == 0
+        self.next_button.disabled = self.page_index >= len(self.chunks) - 1
+
+    def current_embed(self):
+        return build_lyrics_embed(
+            self.found_label,
+            self.chunks,
+            self.page_index,
+            self.source_url
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester.id:
+            await interaction.response.send_message("This isn't your lyrics panel.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            await self.message.edit(view=self)
+
+    @discord.ui.button(label="Previous Page", style=discord.ButtonStyle.secondary)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page_index -= 1
+        self._refresh_buttons()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    @discord.ui.button(label="Next Page", style=discord.ButtonStyle.primary)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page_index += 1
+        self._refresh_buttons()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
 @bot.command()
 async def lyrics(ctx):
     guild = ctx.guild
@@ -306,6 +368,7 @@ async def lyrics(ctx):
     title = current.title
     artist = getattr(current, "artist", None)
     track = getattr(current, "track", None)
+    source_url = getattr(current, "webpage_url", None)
 
     await ctx.send(f"Searching lyrics for: **{title}**")
 
@@ -388,13 +451,9 @@ async def lyrics(ctx):
             return await ctx.send("Lyrics not found.")
 
         chunks = split_lyrics_chunks(lyrics_text, chunk_size=1800)
-
-        for index, chunk in enumerate(chunks, start=1):
-            if len(chunks) == 1:
-                header = f"**Lyrics for {found_label}:**"
-            else:
-                header = f"**Lyrics for {found_label} ({index}/{len(chunks)}):**"
-            await ctx.send(f"{header}\n```{chunk}```")
+        view = LyricsPaginatorView(ctx.author, found_label, chunks, source_url)
+        message = await ctx.send(embed=view.current_embed(), view=view)
+        view.message = message
 
     except Exception as e:
         print(f"Lyrics error: {e}")
