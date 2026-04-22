@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord.ext.commands import BucketType
 import random
 import asyncio
 import json
@@ -1248,8 +1249,8 @@ async def ping(ctx, member: discord.Member = None, times: int = 3):
 # ================== LINK COMMAND ==================
 
 
-@bot.command(aliases=["cmds"])
-async def commands(ctx):
+@bot.command(name="commands", aliases=["cmds"])
+async def commands_list(ctx):
     try:
         website_url = "https://unblended-paralyze-cursor.ngrok-free.dev"
 
@@ -2298,7 +2299,7 @@ async def start_music_worker(guild, text_channel):
 
 
 @bot.command()
-@commands.cooldown(2, 5, commands.BucketType.user)
+@commands.cooldown(2, 5, BucketType.user)
 async def play(ctx, *, query):
     voice_client = await ensure_voice(ctx)
     if voice_client is None:
