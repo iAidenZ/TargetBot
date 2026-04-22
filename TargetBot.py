@@ -296,17 +296,39 @@ def split_lyrics_chunks(text, chunk_size=1800):
     return chunks or [text[:chunk_size]]
 
 
+def format_lyrics_for_embed(text):
+    lines = [line.rstrip() for line in text.splitlines()]
+    formatted_lines = []
+    blank_streak = 0
+
+    for line in lines:
+        if not line.strip():
+            blank_streak += 1
+            if blank_streak <= 1:
+                formatted_lines.append("")
+            continue
+
+        blank_streak = 0
+        formatted_lines.append(line)
+
+        # Add breathing room so the text feels larger / less cramped.
+        if len(line) > 25:
+            formatted_lines.append("")
+
+    formatted = "\n".join(formatted_lines).strip()
+    return formatted or text
+
+
 def build_lyrics_embed(found_label, chunks, page_index, source_url=None):
     total_pages = len(chunks)
     embed = discord.Embed(
-        title="Lyrics Viewer",
+        title=found_label,
         description=chunks[page_index],
-        color=discord.Color.purple()
+        color=discord.Color.magenta()
     )
-    embed.add_field(name="Track", value=found_label, inline=False)
     if source_url:
-        embed.add_field(name="Source", value=f"[Open track]({source_url})", inline=False)
-    embed.set_footer(text=f"Page {page_index + 1}/{total_pages}")
+        embed.description += f"\n\n[Open track]({source_url})"
+    embed.set_footer(text=f"Lyrics page {page_index + 1}/{total_pages}")
     return embed
 
 
@@ -450,7 +472,8 @@ async def lyrics(ctx):
         if not lyrics_text:
             return await ctx.send("Lyrics not found.")
 
-        chunks = split_lyrics_chunks(lyrics_text, chunk_size=1800)
+        lyrics_text = format_lyrics_for_embed(lyrics_text)
+        chunks = split_lyrics_chunks(lyrics_text, chunk_size=900)
         view = LyricsPaginatorView(ctx.author, found_label, chunks, source_url)
         message = await ctx.send(embed=view.current_embed(), view=view)
         view.message = message
