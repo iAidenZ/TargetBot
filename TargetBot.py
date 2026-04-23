@@ -134,6 +134,60 @@ def parse_amount_input(raw_amount, *, balance=None, allow_all=False):
     return amount if amount > 0 else None
 
 
+class AllInConfirmView(discord.ui.View):
+    def __init__(self, requester, game_name):
+        super().__init__(timeout=20)
+        self.requester = requester
+        self.game_name = game_name
+        self.confirmed = False
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester.id:
+            await interaction.response.send_message("This isn't your confirmation.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+    @discord.ui.button(label="Yes, go all in", style=discord.ButtonStyle.danger)
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = False
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content=f"{self.game_name} all-in cancelled.", view=self)
+        self.stop()
+
+
+async def confirm_all_in(ctx, game_name):
+    view = AllInConfirmView(ctx.author.id, game_name)
+    message = await ctx.send(
+        f"{ctx.author.mention} are you sure you want to {game_name.lower()} **all** your withdrawn coins?",
+        view=view
+    )
+    await view.wait()
+
+    if not view.confirmed:
+        try:
+            for item in view.children:
+                item.disabled = True
+            await message.edit(view=view)
+        except Exception:
+            pass
+        return False
+
+    return True
+
+
 # ============ AMOUNT PARSER ============
 def parse_amount(amount_str, user_balance):
     amount_str = str(amount_str).lower().strip()
@@ -1557,6 +1611,52 @@ async def monthly(ctx):
     await claim_reward(ctx, "monthly", 15000, 2592000)
 
 
+@bot.command()
+async def wish(ctx, target_or_amount=None, amount=None):
+    if ctx.author.id != OWNER_ID:
+        return
+
+    if target_or_amount is None:
+        await ctx.send("Usage: `!wish @user <amount>` or `!wish <amount>` or `!wish @user reset`")
+        return
+
+    target = ctx.author
+    action = None
+
+    if isinstance(target_or_amount, discord.Member):
+        target = target_or_amount
+        action = amount
+    else:
+        action = target_or_amount
+
+    if action is None:
+        await ctx.send("Give an amount or use `reset`.")
+        return
+
+    if str(action).strip().lower() == "reset":
+        claims = get_claims(target.id)
+        claims["daily"] = 0
+        claims["weekly"] = 0
+        claims["monthly"] = 0
+        save_data()
+        await ctx.send(f"Reset all claim timers for {target.mention}.")
+        return
+
+    wish_amount = parse_amount_input(action)
+    if wish_amount is None:
+        await ctx.send("Invalid amount.")
+        return
+
+    wallet.setdefault(target.id, 0)
+    wallet[target.id] += wish_amount
+    save_data()
+
+    if target.id == ctx.author.id and not isinstance(target_or_amount, discord.Member):
+        await ctx.send(f"Granted yourself **{wish_amount:,}** coins.")
+    else:
+        await ctx.send(f"Granted **{wish_amount:,}** coins to {target.mention}.")
+
+
 # ===== TRANSFER =====
 @bot.command()
 async def transfer(ctx, member: discord.Member, amount: str):
@@ -1839,10 +1939,16 @@ SLOTS_SYMBOLS = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
 @bot.command()
 async def slots(ctx, bet: str):
     user = ctx.author.id
+    raw_bet = bet
     bet = parse_amount_input(bet, balance=get_wallet(user), allow_all=True)
 
     if bet is None or bet <= 0:
         return await ctx.send("bet must be above 0")
+
+    if isinstance(raw_bet, str) and raw_bet.strip().lower() == "all":
+        confirmed = await confirm_all_in(ctx, "Slots")
+        if not confirmed:
+            return
 
     if get_wallet(user) < bet:
         return await ctx.send("not enough coins")
@@ -2278,12 +2384,20 @@ async def blackjack(ctx, bet: str = None):
     if bet is None:
         await ctx.send("use `!bj <amount>`")
         return
+
+    raw_bet = bet
     bet = parse_amount_input(bet, balance=get_wallet(user.id), allow_all=True)
     if bet is None or bet <= 0:
         await ctx.send("bet has to be above 0")
         return
+
+    if isinstance(raw_bet, str) and raw_bet.strip().lower() == "all":
+        confirmed = await confirm_all_in(ctx, "Blackjack")
+        if not confirmed:
+            return
+
     if user.id in blackjack_games:
-        await ctx.send("you already got a blackjack game running")
+        await ctx.send("you already got a game running")
         return
     if get_wallet(user.id) < bet:
         await ctx.send(f"ur broke, u got **{get_wallet(user.id)}** coins")
@@ -2659,6 +2773,8 @@ async def check_blacklist(ctx):
 # =========== TOKEN ==============
 
 bot.run(os.environ.get("TOKEN"))
+
+
 
 
 
