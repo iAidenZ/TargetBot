@@ -12,6 +12,7 @@ import tempfile
 from urllib.parse import quote_plus, urlparse
 from functools import partial
 import yt_dlp
+from decimal import Decimal, InvalidOperation
 
 DATA_FILE = "/app/data/data.json"
 
@@ -99,6 +100,55 @@ def get_level(xp):
 def generate_random_word(length=5):
     return "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(length))
 
+
+def parse_amount_input(raw_amount, *, balance=None, allow_all=False):
+    if raw_amount is None:
+        return None
+
+    text = str(raw_amount).strip().lower().replace(",", "")
+    if not text:
+        return None
+
+    if allow_all and text == "all":
+        return balance if balance is not None else None
+
+    multiplier = 1
+    if text[-1:] in {"k", "m", "b"}:
+        suffix = text[-1]
+        text = text[:-1]
+        multiplier = {
+            "k": 1_000,
+            "m": 1_000_000,
+            "b": 1_000_000_000,
+        }[suffix]
+
+    try:
+        amount = Decimal(text) * multiplier
+    except (InvalidOperation, ValueError):
+        return None
+
+    if amount != amount.to_integral_value():
+        return None
+
+    amount = int(amount)
+    return amount if amount > 0 else None
+
+
+# ============ AMOUNT PARSER ============
+def parse_amount(amount_str, user_balance):
+    amount_str = str(amount_str).lower().strip()
+    if amount_str == "all":
+        return user_balance
+    try:
+        if amount_str.endswith("k"):
+            return int(float(amount_str[:-1]) * 1_000)
+        elif amount_str.endswith("m"):
+            return int(float(amount_str[:-1]) * 1_000_000)
+        else:
+            return int(amount_str)
+    except:
+        return None
+    
 
 # ================= BOT =================
 
@@ -1509,11 +1559,12 @@ async def monthly(ctx):
 
 # ===== TRANSFER =====
 @bot.command()
-async def transfer(ctx, member: discord.Member, amount: int):
+async def transfer(ctx, member: discord.Member, amount: str):
     sender = ctx.author.id
     target = member.id
+    amount = parse_amount_input(amount, balance=get_wallet(sender), allow_all=True)
 
-    if amount <= 0:
+    if amount is None or amount <= 0:
         return await ctx.send("Invalid amount.")
 
     if get_wallet(sender) < amount:
@@ -1531,10 +1582,11 @@ async def transfer(ctx, member: discord.Member, amount: int):
 
 # ===== DEPOSIT =====
 @bot.command(aliases=["dep"])
-async def deposit(ctx, amount: int):
+async def deposit(ctx, amount: str):
     user = ctx.author.id
+    amount = parse_amount_input(amount, balance=get_wallet(user), allow_all=True)
 
-    if amount <= 0:
+    if amount is None or amount <= 0:
         return await ctx.send("Invalid amount.")
 
     if get_wallet(user) < amount:
@@ -1552,10 +1604,11 @@ async def deposit(ctx, amount: int):
 
 # ===== WITHDRAW =====
 @bot.command(aliases=["wit"])
-async def withdraw(ctx, amount: int):
+async def withdraw(ctx, amount: str):
     user = ctx.author.id
+    amount = parse_amount_input(amount, balance=get_bank(user), allow_all=True)
 
-    if amount <= 0:
+    if amount is None or amount <= 0:
         return await ctx.send("Invalid amount.")
 
     if get_bank(user) < amount:
@@ -1768,7 +1821,7 @@ async def bail(ctx):
         return await ctx.send("you're not jailed")
 
     left = jail_time_left(user)
-    cost = max(100, left * 2)
+    cost = max(75, left // 4)
 
     if get_wallet(user) < cost:
         return await ctx.send(f"need **{cost}** coins to bail out")
@@ -1784,10 +1837,11 @@ async def bail(ctx):
 SLOTS_SYMBOLS = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
 
 @bot.command()
-async def slots(ctx, bet: int):
+async def slots(ctx, bet: str):
     user = ctx.author.id
+    bet = parse_amount_input(bet, balance=get_wallet(user), allow_all=True)
 
-    if bet <= 0:
+    if bet is None or bet <= 0:
         return await ctx.send("bet must be above 0")
 
     if get_wallet(user) < bet:
@@ -2094,12 +2148,12 @@ class PlayAgainView(discord.ui.View):
         await self.channel.send(f"{self.user.mention} how much do you want to bet? type it below 👇")
 
         def check(m):
-            return m.author == self.user and m.channel == self.channel and m.content.isdigit()
+            return m.author == self.user and m.channel == self.channel
 
         try:
             msg = await bot.wait_for("message", timeout=30.0, check=check)
-            new_bet = int(msg.content)
-            if new_bet <= 0:
+            new_bet = parse_amount_input(msg.content, balance=get_wallet(self.user.id), allow_all=True)
+            if new_bet is None or new_bet <= 0:
                 await self.channel.send("bet has to be above 0")
                 return
             if self.user.id in blackjack_games:
@@ -2219,12 +2273,13 @@ class BlackjackView(discord.ui.View):
 
 
 @bot.command(aliases=["bj"])
-async def blackjack(ctx, bet: int = None):
+async def blackjack(ctx, bet: str = None):
     user = ctx.author
     if bet is None:
         await ctx.send("use `!bj <amount>`")
         return
-    if bet <= 0:
+    bet = parse_amount_input(bet, balance=get_wallet(user.id), allow_all=True)
+    if bet is None or bet <= 0:
         await ctx.send("bet has to be above 0")
         return
     if user.id in blackjack_games:
@@ -2604,6 +2659,8 @@ async def check_blacklist(ctx):
 # =========== TOKEN ==============
 
 bot.run(os.environ.get("TOKEN"))
+
+
 
 
 
