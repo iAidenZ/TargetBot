@@ -1611,29 +1611,38 @@ async def monthly(ctx):
     await claim_reward(ctx, "monthly", 15000, 2592000)
 
 
+# ============== Owner Power =============
+
 @bot.command()
-async def wish(ctx, target_or_amount=None, amount=None):
+async def wish(ctx, *args):
     if ctx.author.id != OWNER_ID:
         return
 
-    if target_or_amount is None:
-        await ctx.send("Usage: `!wish @user <amount>` or `!wish <amount>` or `!wish @user reset`")
+    if not args:
+        await ctx.send(
+            "Usage: `!wish @user <amount>` or `!wish <amount>` or "
+            "`!wish @user reset` or `!wish @user remove <amount>`"
+        )
         return
 
     target = ctx.author
-    action = None
+    parts = list(args)
+    converter = commands.MemberConverter()
 
-    if isinstance(target_or_amount, discord.Member):
-        target = target_or_amount
-        action = amount
-    else:
-        action = target_or_amount
+    try:
+        possible_target = await converter.convert(ctx, parts[0])
+        target = possible_target
+        parts = parts[1:]
+    except commands.BadArgument:
+        pass
 
-    if action is None:
-        await ctx.send("Give an amount or use `reset`.")
+    if not parts:
+        await ctx.send("Give an amount, or use `reset`, or `remove <amount>`.")
         return
 
-    if str(action).strip().lower() == "reset":
+    action = str(parts[0]).strip().lower()
+
+    if action == "reset":
         claims = get_claims(target.id)
         claims["daily"] = 0
         claims["weekly"] = 0
@@ -1642,7 +1651,23 @@ async def wish(ctx, target_or_amount=None, amount=None):
         await ctx.send(f"Reset all claim timers for {target.mention}.")
         return
 
-    wish_amount = parse_amount_input(action)
+    if action in {"remove", "take", "delete", "del"}:
+        if len(parts) < 2:
+            await ctx.send("Usage: `!wish @user remove <amount>`")
+            return
+
+        wish_amount = parse_amount_input(parts[1], balance=get_wallet(target.id), allow_all=True)
+        if wish_amount is None:
+            await ctx.send("Invalid amount.")
+            return
+
+        wallet.setdefault(target.id, 0)
+        wallet[target.id] = max(0, wallet[target.id] - wish_amount)
+        save_data()
+        await ctx.send(f"Removed **{wish_amount:,}** coins from {target.mention}.")
+        return
+
+    wish_amount = parse_amount_input(parts[0])
     if wish_amount is None:
         await ctx.send("Invalid amount.")
         return
@@ -1651,7 +1676,7 @@ async def wish(ctx, target_or_amount=None, amount=None):
     wallet[target.id] += wish_amount
     save_data()
 
-    if target.id == ctx.author.id and not isinstance(target_or_amount, discord.Member):
+    if target.id == ctx.author.id:
         await ctx.send(f"Granted yourself **{wish_amount:,}** coins.")
     else:
         await ctx.send(f"Granted **{wish_amount:,}** coins to {target.mention}.")
