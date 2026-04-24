@@ -140,7 +140,7 @@ class AllInConfirmView(discord.ui.View):
         self.requester = requester
         self.game_name = game_name
         self.confirmed = False
-        self.message = None
+        self.message = None  # we store message for timeout edit
 
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.requester.id:
@@ -154,12 +154,8 @@ class AllInConfirmView(discord.ui.View):
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
-
         if self.message:
-            await self.message.edit(
-                content="Timed out.",
-                view=self
-            )
+            await self.message.edit(view=self)
 
     @discord.ui.button(label="Yes, go all in", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -185,25 +181,24 @@ class AllInConfirmView(discord.ui.View):
         self.stop()
 
 
-@bot.command()
-async def allin(ctx, game_name):
-    view = AllInConfirmView(ctx.author, game_name)
-
+async def confirm_all_in(ctx, game_name):
+    view = AllInConfirmView(ctx.author.id, game_name)
     message = await ctx.send(
         f"{ctx.author.mention} are you sure you want to {game_name.lower()} **all** your withdrawn coins?",
         view=view
     )
-
-    view.message = message
-
     await view.wait()
 
     if not view.confirmed:
-        for item in view.children:
-            item.disabled = True
-        await message.edit(view=view)
-        return
+        try:
+            for item in view.children:
+                item.disabled = True
+            await message.edit(view=view)
+        except Exception:
+            pass
+        return False
 
+    return True
 
 
 # ============ AMOUNT PARSER ============
