@@ -3130,6 +3130,7 @@ async def delivery(ctx):
         vdata      = DELIVERY_VEHICLES[equipped]
         is_vip     = random.random() < DELIVERY_VIP_CHANCE
         step_count = vdata["steps_vip"] if is_vip else vdata["steps_normal"]
+        route      = [random.choice(DELIVERY_DIRECTIONS) for _ in range(step_count)]
         time_limit = DELIVERY_BASE_TIME + vdata["time_bonus"]
         step_timeout = time_limit / step_count
 
