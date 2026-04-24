@@ -120,9 +120,9 @@ FISHING_CATCHES = {
 # ── Delivery vehicles ────────────────────────────────────────────────────────
 DELIVERY_VEHICLES = {
     "Scooter":   {"price": 0,         "time_bonus": 0,  "reward_multiplier": 1.00, "emoji": "🛵", "steps_normal": 5, "steps_vip": 7},
-    "Bike":      {"price": 25_000,    "time_bonus": 5,  "reward_multiplier": 1.10, "emoji": "🚲", "steps_normal": 5, "steps_vip": 6},
-    "Car":       {"price": 200_000,   "time_bonus": 10, "reward_multiplier": 1.25, "emoji": "🚗", "steps_normal": 4, "steps_vip": 5},
-    "Super Van": {"price": 2_000_000, "time_bonus": 20, "reward_multiplier": 1.50, "emoji": "🚀", "steps_normal": 3, "steps_vip": 4},
+    "Bike":      {"price": 100_000,    "time_bonus": 5,  "reward_multiplier": 1.10, "emoji": "🚲", "steps_normal": 5, "steps_vip": 6},
+    "Car":       {"price": 1_000_000,   "time_bonus": 10, "reward_multiplier": 1.25, "emoji": "🚗", "steps_normal": 4, "steps_vip": 5},
+    "Super Van": {"price": 25_000_000, "time_bonus": 20, "reward_multiplier": 1.50, "emoji": "🚀", "steps_normal": 3, "steps_vip": 4},
 }
 
 DELIVERY_BASE_TIME      = 20          # seconds before vehicle bonus
