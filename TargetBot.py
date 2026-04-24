@@ -137,13 +137,13 @@ def parse_amount_input(raw_amount, *, balance=None, allow_all=False):
 class AllInConfirmView(discord.ui.View):
     def __init__(self, requester, game_name):
         super().__init__(timeout=20)
-        self.requester = requester
+        self.requester_id = requester.id if hasattr(requester, "id") else int(requester)
         self.game_name = game_name
         self.confirmed = False
         self.message = None  # we store message for timeout edit
 
     async def interaction_check(self, interaction: discord.Interaction):
-        if interaction.user.id != self.requester.id:
+        if interaction.user.id != self.requester_id:
             await interaction.response.send_message(
                 "This isn't your confirmation.",
                 ephemeral=True
@@ -155,7 +155,10 @@ class AllInConfirmView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         if self.message:
-            await self.message.edit(view=self)
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
 
     @discord.ui.button(label="Yes, go all in", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -164,7 +167,10 @@ class AllInConfirmView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(
+            content=f"{self.game_name} all-in confirmed. Starting now...",
+            view=self
+        )
         self.stop()
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
@@ -174,10 +180,7 @@ class AllInConfirmView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
-        await interaction.response.edit_message(
-            content=f"{self.game_name} all-in cancelled.",
-            view=self
-        )
+        await interaction.response.edit_message(view=self)
         self.stop()
 
 
