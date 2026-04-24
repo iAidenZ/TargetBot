@@ -45,6 +45,16 @@ fishing_rods_owned = {}
 fishing_equipped_rod = {}
 fishing_active = set()
 
+# ── General player level (XP from all activities) ────────────────────────────
+player_general_xp: dict[int, int]    = {}
+player_general_level: dict[int, int] = {}
+
+# ── Fishing hooks & bait ─────────────────────────────────────────────────────
+hooks_owned: dict[int, list]     = {}
+hooks_equipped: dict[int, str]   = {}
+bait_inventory: dict[int, dict]  = {}   # {user_id: {"Worm": n, "Shrimp": n, ...}}
+bait_equipped: dict[int, str]    = {}
+
 # ── Delivery system ──────────────────────────────────────────────────────────
 delivery_active = set()
 delivery_vehicles_owned: dict[int, list] = {}
@@ -117,12 +127,28 @@ FISHING_CATCHES = {
     },
 }
 
+# ── Fishing hooks ────────────────────────────────────────────────────────────
+FISHING_HOOKS = {
+    "Basic Hook":   {"price": 0,       "level_req": 0,  "emoji": "🪝", "rare_bonus": 0,  "shark_bonus": 0,  "legendary_bonus": 0.0},
+    "Iron Hook":    {"price": 5_000,   "level_req": 3,  "emoji": "⚙️", "rare_bonus": 5,  "shark_bonus": 1,  "legendary_bonus": 0.0},
+    "Golden Hook":  {"price": 50_000,  "level_req": 10, "emoji": "🥇", "rare_bonus": 12, "shark_bonus": 3,  "legendary_bonus": 0.25},
+    "Diamond Hook": {"price": 500_000, "level_req": 25, "emoji": "💎", "rare_bonus": 20, "shark_bonus": 6,  "legendary_bonus": 0.75},
+}
+
+# ── Fishing bait ─────────────────────────────────────────────────────────────
+FISHING_BAITS = {
+    "Worm":       {"price": 0,      "level_req": 0,  "emoji": "🪱", "reward_bonus": 0.00, "consumed": False},
+    "Shrimp":     {"price": 500,    "level_req": 2,  "emoji": "🦐", "reward_bonus": 0.25, "consumed": True},
+    "Squid":      {"price": 2_000,  "level_req": 8,  "emoji": "🦑", "reward_bonus": 0.60, "consumed": True},
+    "Magic Bait": {"price": 10_000, "level_req": 20, "emoji": "✨", "reward_bonus": 1.50, "consumed": True},
+}
+
 # ── Delivery vehicles ────────────────────────────────────────────────────────
 DELIVERY_VEHICLES = {
-    "Scooter":   {"price": 0,         "time_bonus": 0,  "reward_multiplier": 1.00, "emoji": "🛵", "steps_normal": 5, "steps_vip": 7},
-    "Bike":      {"price": 100_000,    "time_bonus": 5,  "reward_multiplier": 1.10, "emoji": "🚲", "steps_normal": 5, "steps_vip": 6},
-    "Car":       {"price": 1_000_000,   "time_bonus": 10, "reward_multiplier": 1.25, "emoji": "🚗", "steps_normal": 4, "steps_vip": 5},
-    "Super Van": {"price": 25_000_000, "time_bonus": 20, "reward_multiplier": 1.50, "emoji": "🚀", "steps_normal": 3, "steps_vip": 4},
+    "Scooter":   {"price": 0,         "level_req": 0,  "time_bonus": 0,  "reward_multiplier": 1.00, "emoji": "🛵", "steps_normal": 5, "steps_vip": 7},
+    "Bike":      {"price": 25_000,    "level_req": 5,  "time_bonus": 5,  "reward_multiplier": 1.10, "emoji": "🚲", "steps_normal": 5, "steps_vip": 6},
+    "Car":       {"price": 200_000,   "level_req": 15, "time_bonus": 10, "reward_multiplier": 1.25, "emoji": "🚗", "steps_normal": 4, "steps_vip": 5},
+    "Super Van": {"price": 2_000_000, "level_req": 30, "time_bonus": 20, "reward_multiplier": 1.50, "emoji": "🚀", "steps_normal": 3, "steps_vip": 4},
 }
 
 DELIVERY_BASE_TIME      = 20          # seconds before vehicle bonus
@@ -137,6 +163,8 @@ def load_data():
     global farm_xp, farm_level, player_health, player_lives, player_points, wallet, bank, economy_claims, jail
     global fishing_xp, fishing_level, fishing_rods_owned, fishing_equipped_rod, private_bal
     global delivery_vehicles_owned, delivery_equipped_vehicle
+    global player_general_xp, player_general_level
+    global hooks_owned, hooks_equipped, bait_inventory, bait_equipped
 
     if not os.path.exists(DATA_FILE):
         return
@@ -160,6 +188,12 @@ def load_data():
     fishing_equipped_rod = {int(k): v for k, v in data.get("fishing_equipped_rod", {}).items()}
     delivery_vehicles_owned = {int(k): v for k, v in data.get("delivery_vehicles_owned", {}).items()}
     delivery_equipped_vehicle = {int(k): v for k, v in data.get("delivery_equipped_vehicle", {}).items()}
+    player_general_xp    = {int(k): v for k, v in data.get("player_general_xp", {}).items()}
+    player_general_level = {int(k): v for k, v in data.get("player_general_level", {}).items()}
+    hooks_owned    = {int(k): v for k, v in data.get("hooks_owned", {}).items()}
+    hooks_equipped = {int(k): v for k, v in data.get("hooks_equipped", {}).items()}
+    bait_inventory = {int(k): v for k, v in data.get("bait_inventory", {}).items()}
+    bait_equipped  = {int(k): v for k, v in data.get("bait_equipped", {}).items()}
 
 
 def save_data():
@@ -181,6 +215,12 @@ def save_data():
             "fishing_equipped_rod": {str(k): v for k, v in fishing_equipped_rod.items()},
             "delivery_vehicles_owned": {str(k): v for k, v in delivery_vehicles_owned.items()},
             "delivery_equipped_vehicle": {str(k): v for k, v in delivery_equipped_vehicle.items()},
+            "player_general_xp":    {str(k): v for k, v in player_general_xp.items()},
+            "player_general_level": {str(k): v for k, v in player_general_level.items()},
+            "hooks_owned":    {str(k): v for k, v in hooks_owned.items()},
+            "hooks_equipped": {str(k): v for k, v in hooks_equipped.items()},
+            "bait_inventory": {str(k): v for k, v in bait_inventory.items()},
+            "bait_equipped":  {str(k): v for k, v in bait_equipped.items()},
         }, f, indent=4)
 
 
@@ -221,6 +261,66 @@ def get_fishing_level_value(user_id):
     return fishing_level[user_id]
 
 
+# ── General player level helpers ─────────────────────────────────────────────
+GENERAL_XP_PER_LEVEL = 500
+
+def get_general_xp(user_id: int) -> int:
+    player_general_xp.setdefault(user_id, 0)
+    return player_general_xp[user_id]
+
+def get_general_level(user_id: int) -> int:
+    player_general_level.setdefault(user_id, get_general_xp(user_id) // GENERAL_XP_PER_LEVEL)
+    return player_general_level[user_id]
+
+def add_general_xp(user_id: int, amount: int) -> tuple[int, bool]:
+    """Add XP and return (new_level, leveled_up)."""
+    old_level = get_general_level(user_id)
+    player_general_xp[user_id] = get_general_xp(user_id) + amount
+    new_level = player_general_xp[user_id] // GENERAL_XP_PER_LEVEL
+    player_general_level[user_id] = new_level
+    return new_level, new_level > old_level
+
+# ── Hook helpers ─────────────────────────────────────────────────────────────
+def get_owned_hooks(user_id: int) -> list:
+    hooks = hooks_owned.setdefault(user_id, ["Basic Hook"])
+    if "Basic Hook" not in hooks:
+        hooks.insert(0, "Basic Hook")
+    return hooks
+
+def get_equipped_hook(user_id: int) -> str:
+    eq = hooks_equipped.setdefault(user_id, "Basic Hook")
+    if eq not in get_owned_hooks(user_id):
+        eq = "Basic Hook"
+        hooks_equipped[user_id] = eq
+    return eq
+
+# ── Bait helpers ─────────────────────────────────────────────────────────────
+def get_bait_inventory(user_id: int) -> dict:
+    inv = bait_inventory.setdefault(user_id, {"Worm": -1})  # -1 = unlimited
+    if "Worm" not in inv:
+        inv["Worm"] = -1
+    return inv
+
+def get_equipped_bait(user_id: int) -> str:
+    eq = bait_equipped.setdefault(user_id, "Worm")
+    inv = get_bait_inventory(user_id)
+    # Fall back to Worm if equipped bait is depleted
+    if eq != "Worm" and inv.get(eq, 0) <= 0:
+        eq = "Worm"
+        bait_equipped[user_id] = eq
+    return eq
+
+def consume_bait(user_id: int) -> str:
+    """Use one unit of equipped bait. Returns the bait name used."""
+    bait_name = get_equipped_bait(user_id)
+    inv = get_bait_inventory(user_id)
+    if bait_name != "Worm" and FISHING_BAITS[bait_name]["consumed"]:
+        inv[bait_name] = max(0, inv.get(bait_name, 0) - 1)
+        if inv[bait_name] == 0:
+            bait_equipped[user_id] = "Worm"  # auto switch back
+    return bait_name
+
+
 def get_owned_rods(user_id):
     rods = fishing_rods_owned.setdefault(user_id, ["Basic Rod"])
     if "Basic Rod" not in rods:
@@ -254,11 +354,12 @@ def build_fishing_grid(catch_position):
     ])
 
 
-def choose_fish_catch(rod_name):
-    rod_data = FISHING_RODS[rod_name]
-    boot_weight = 8
-    rare_weight = 20 + rod_data["rare_bonus"]
-    shark_weight = 2 + rod_data["shark_bonus"]
+def choose_fish_catch(rod_name: str, hook_name: str = "Basic Hook"):
+    rod_data  = FISHING_RODS[rod_name]
+    hook_data = FISHING_HOOKS[hook_name]
+    boot_weight  = 8
+    rare_weight  = 20 + rod_data["rare_bonus"]  + hook_data["rare_bonus"]
+    shark_weight = 2  + rod_data["shark_bonus"] + hook_data["shark_bonus"]
     small_weight = max(1, 100 - boot_weight - rare_weight - shark_weight)
 
     return random.choices(
@@ -268,32 +369,25 @@ def choose_fish_catch(rod_name):
     )[0]
 
 
-def _legendary_chance_multiplier(fishing_level_val: int, rare_bonus: int) -> float:
-    """
-    Scales legendary spawn chance slightly with progression.
-    Max multiplier is capped at 3.0x to keep both fish endgame-rare.
-      - Level 0  / Basic Rod  → 1.00x  (base chance)
-      - Level 50 / OP Rod     → ≈ 2.1x
-      - Level 100/ Unbelievable → ≈ 3.0x
-    """
-    level_factor = 1.0 + min(fishing_level_val, 100) * 0.01   # up to +100 %
-    rod_factor   = 1.0 + min(rare_bonus, 30)        * 0.033   # up to +99 %
-    return min(level_factor * rod_factor, 3.0)
+def _legendary_chance_multiplier(fishing_level_val: int, rare_bonus: int, legendary_hook_bonus: float = 0.0) -> float:
+    level_factor = 1.0 + min(fishing_level_val, 100) * 0.01
+    rod_factor   = 1.0 + min(rare_bonus, 30)         * 0.033
+    hook_factor  = 1.0 + legendary_hook_bonus
+    return min(level_factor * rod_factor * hook_factor, 3.0)
 
 
-def check_legendary_catch(rod_name: str, fishing_level_val: int) -> str | None:
-    """
-    Independent lottery for Kraken / Bloop before the normal catch table.
-    Returns 'kraken', 'bloop', or None.
-    """
-    rod_data   = FISHING_RODS[rod_name]
-    multiplier = _legendary_chance_multiplier(fishing_level_val, rod_data["rare_bonus"])
+def check_legendary_catch(rod_name: str, fishing_level_val: int, hook_name: str = "Basic Hook") -> str | None:
+    rod_data  = FISHING_RODS[rod_name]
+    hook_data = FISHING_HOOKS[hook_name]
+    multiplier = _legendary_chance_multiplier(
+        fishing_level_val, rod_data["rare_bonus"], hook_data["legendary_bonus"]
+    )
 
     kraken_chance = FISHING_CATCHES["kraken"]["base_chance"] * multiplier
     bloop_chance  = FISHING_CATCHES["bloop"]["base_chance"]  * multiplier
 
     roll = random.random()
-    if roll < bloop_chance:         # Bloop checked first (rarer, so narrower window)
+    if roll < bloop_chance:
         return "bloop"
     if roll < bloop_chance + kraken_chance:
         return "kraken"
@@ -2014,18 +2108,24 @@ async def fish(ctx):
 
         if guess == position:
             fishing_level_val = get_fishing_level_value(user_id)
+            equipped_hook = get_equipped_hook(user_id)
+            used_bait     = consume_bait(user_id)
+            bait_data     = FISHING_BAITS[used_bait]
 
             # ── Legendary check (independent lottery) ───────────────────────
-            legendary_key = check_legendary_catch(equipped, fishing_level_val)
+            legendary_key = check_legendary_catch(equipped, fishing_level_val, equipped_hook)
 
             if legendary_key:
                 catch_key = legendary_key
                 catch     = FISHING_CATCHES[catch_key]
                 reward    = legendary_reward(catch_key, equipped, fishing_level_val)
             else:
-                catch_key = choose_fish_catch(equipped)
+                catch_key = choose_fish_catch(equipped, equipped_hook)
                 catch     = FISHING_CATCHES[catch_key]
                 reward    = int(catch["reward"] * rod_data["reward_multiplier"])
+
+            # ── Bait coin bonus ──────────────────────────────────────────────
+            reward = int(reward * (1.0 + bait_data["reward_bonus"]))
             # ────────────────────────────────────────────────────────────────
 
             wallet.setdefault(user_id, 0)
@@ -2041,20 +2141,30 @@ async def fish(ctx):
                 new_level = fishing_xp[user_id] // 100
                 fishing_level[user_id] = new_level
                 leveled_up = new_level > old_level
+                # General XP
+                gen_xp_gain = random.randint(10, 25)
+                new_gen_level, gen_leveled = add_general_xp(user_id, gen_xp_gain)
             else:
                 xp_gained = 0
+                gen_xp_gain = 5
+                new_gen_level, gen_leveled = add_general_xp(user_id, gen_xp_gain)
 
             save_data()
 
+            bait_line = (
+                f"🎣 Bait: {bait_data['emoji']} {used_bait}"
+                + (f" (+{int(bait_data['reward_bonus']*100)}% coins)" if bait_data["reward_bonus"] else "")
+            )
+
             if legendary_key:
-                # Legendary catch — special embed
                 result_embed = discord.Embed(
                     title=f"🌟 LEGENDARY CATCH! {catch['emoji']} {catch['name']}!",
                     description=(
                         f"{grid}\n\n"
                         f"⚠️ You pulled up a **{catch['name']}** from the depths!\n\n"
                         f"**+{format_coins(reward)} coins**\n"
-                        f"**+{xp_gained} XP**"
+                        f"**+{xp_gained} Fishing XP** | **+{gen_xp_gain} General XP**\n"
+                        f"{bait_line}"
                     ),
                     color=discord.Color.gold()
                 )
@@ -2064,14 +2174,19 @@ async def fish(ctx):
                     description=(
                         f"{grid}\n\n"
                         f"**+{format_coins(reward)} coins**\n"
-                        f"**+{xp_gained} XP**"
+                        f"**+{xp_gained} Fishing XP** | **+{gen_xp_gain} General XP**\n"
+                        f"{bait_line}"
                     ),
                     color=discord.Color.green() if catch_key != "boot" else discord.Color.orange()
                 )
             result_embed.add_field(name="Fishing Level", value=str(new_level), inline=True)
+            result_embed.add_field(name="General Level", value=str(new_gen_level), inline=True)
             result_embed.add_field(name="Rod", value=equipped, inline=True)
+            result_embed.add_field(name="Hook", value=f"{FISHING_HOOKS[equipped_hook]['emoji']} {equipped_hook}", inline=True)
             if leveled_up:
-                result_embed.add_field(name="Level Up!", value=f"You reached **Level {new_level}**!", inline=False)
+                result_embed.add_field(name="🎣 Fishing Level Up!", value=f"Level **{new_level}**!", inline=False)
+            if gen_leveled:
+                result_embed.add_field(name="⬆️ General Level Up!", value=f"Level **{new_gen_level}**!", inline=False)
         else:
             boot = FISHING_CATCHES["boot"]
             reward = int(boot["reward"] * rod_data["reward_multiplier"])
@@ -3014,7 +3129,15 @@ class VehicleShopView(discord.ui.View):
                     f"Equipped **{DELIVERY_VEHICLES[vname]['emoji']} {vname}**.", ephemeral=True
                 )
                 return
-            price = DELIVERY_VEHICLES[vname]["price"]
+            price     = DELIVERY_VEHICLES[vname]["price"]
+            level_req = DELIVERY_VEHICLES[vname]["level_req"]
+            if get_general_level(self.user_id) < level_req:
+                await interaction.response.send_message(
+                    f"You need **General Level {level_req}** to buy **{vname}**. "
+                    f"(You are Level {get_general_level(self.user_id)})",
+                    ephemeral=True,
+                )
+                return
             if get_wallet(self.user_id) < price:
                 await interaction.response.send_message(
                     f"You need **{format_coins(price)}** coins for **{vname}**.", ephemeral=True
@@ -3050,10 +3173,12 @@ async def vehicleshop(ctx):
     )
     for vname, vdata in DELIVERY_VEHICLES.items():
         status = "✅ Owned" if vname in owned else f"💰 {format_coins(vdata['price'])}"
+        lvl_line = f"🔒 Level {vdata['level_req']} required\n" if vdata["level_req"] > 0 else ""
         embed.add_field(
             name=f"{vdata['emoji']} {vname}",
             value=(
                 f"{status}\n"
+                f"{lvl_line}"
                 f"⏱️ +{vdata['time_bonus']}s  |  💵 x{vdata['reward_multiplier']}"
             ),
             inline=True,
@@ -3205,6 +3330,8 @@ async def delivery(ctx):
 
         wallet.setdefault(user_id, 0)
         wallet[user_id] += final_reward
+        gen_xp_gain = random.randint(30, 80)
+        new_gen_level, gen_leveled = add_general_xp(user_id, gen_xp_gain)
         save_data()
 
         speed_label = (
@@ -3220,10 +3347,17 @@ async def delivery(ctx):
                 f"**Customer:** {customer_label}\n"
                 f"**Route length:** {step_count} steps\n"
                 f"**Completion:** {speed_label} ({elapsed:.1f}s / {time_limit}s)\n\n"
-                f"💰 **+{format_coins(final_reward)} coins**"
+                f"💰 **+{format_coins(final_reward)} coins**\n"
+                f"⬆️ **+{gen_xp_gain} General XP** (Level {new_gen_level})"
             ),
             color=discord.Color.green(),
         )
+        if gen_leveled:
+            success_embed.add_field(
+                name="🎉 General Level Up!",
+                value=f"You reached **Level {new_gen_level}**!",
+                inline=False,
+            )
         success_embed.add_field(
             name="Breakdown",
             value=(
@@ -3248,6 +3382,246 @@ async def delivery_error(ctx, error):
         )
     else:
         raise error
+
+
+# ======================== HOOK & BAIT SYSTEM ==================================
+
+class HookShopView(discord.ui.View):
+    def __init__(self, requester, user_id: int):
+        super().__init__(timeout=120)
+        self.requester = requester
+        self.user_id   = user_id
+        for hname, hdata in FISHING_HOOKS.items():
+            btn = discord.ui.Button(
+                label=f"{hdata['emoji']} {hname}",
+                style=discord.ButtonStyle.success if hdata["price"] == 0 else discord.ButtonStyle.primary,
+            )
+            btn.callback = self._make_cb(hname)
+            self.add_item(btn)
+
+    def _make_cb(self, hname: str):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.requester.id:
+                await interaction.response.send_message("Not your shop.", ephemeral=True)
+                return
+            owned = get_owned_hooks(self.user_id)
+            if hname in owned:
+                hooks_equipped[self.user_id] = hname
+                save_data()
+                await interaction.response.send_message(
+                    f"Equipped **{FISHING_HOOKS[hname]['emoji']} {hname}**.", ephemeral=True
+                )
+                return
+            hdata     = FISHING_HOOKS[hname]
+            level_req = hdata["level_req"]
+            if get_general_level(self.user_id) < level_req:
+                await interaction.response.send_message(
+                    f"You need **General Level {level_req}** to buy **{hname}**. "
+                    f"(You are Level {get_general_level(self.user_id)})",
+                    ephemeral=True,
+                )
+                return
+            if get_wallet(self.user_id) < hdata["price"]:
+                await interaction.response.send_message(
+                    f"You need **{format_coins(hdata['price'])}** coins.", ephemeral=True
+                )
+                return
+            wallet[self.user_id] -= hdata["price"]
+            owned.append(hname)
+            hooks_equipped[self.user_id] = hname
+            save_data()
+            await interaction.response.send_message(
+                f"Bought & equipped **{hdata['emoji']} {hname}** for **{format_coins(hdata['price'])}** coins!",
+                ephemeral=True,
+            )
+        return callback
+
+
+@bot.command(aliases=["hshop"])
+async def hookshop(ctx):
+    """Browse and buy fishing hooks."""
+    user_id  = ctx.author.id
+    owned    = get_owned_hooks(user_id)
+    equipped = get_equipped_hook(user_id)
+    gen_lvl  = get_general_level(user_id)
+
+    embed = discord.Embed(
+        title="🪝 Hook Shop",
+        description=(
+            f"**Equipped:** {FISHING_HOOKS[equipped]['emoji']} {equipped}\n"
+            f"**General Level:** {gen_lvl}  |  **Wallet:** {format_coins(get_wallet(user_id))} coins\n\n"
+            "Hooks improve **catch rate & fish rarity**."
+        ),
+        color=discord.Color.teal(),
+    )
+    for hname, hdata in FISHING_HOOKS.items():
+        status   = "✅ Owned" if hname in owned else f"💰 {format_coins(hdata['price'])}"
+        lvl_line = f"🔒 Level {hdata['level_req']}\n" if hdata["level_req"] > 0 else ""
+        embed.add_field(
+            name=f"{hdata['emoji']} {hname}",
+            value=(
+                f"{status}\n{lvl_line}"
+                f"+{hdata['rare_bonus']} rare  |  +{hdata['shark_bonus']} shark\n"
+                f"+{int(hdata['legendary_bonus']*100)}% legendary"
+            ),
+            inline=True,
+        )
+    await ctx.send(embed=embed, view=HookShopView(ctx.author, user_id))
+
+
+@bot.command()
+async def hook(ctx, *, hname: str = None):
+    """Equip a hook you own."""
+    user_id = ctx.author.id
+    if not hname:
+        eq = get_equipped_hook(user_id)
+        return await ctx.send(f"Equipped hook: **{FISHING_HOOKS[eq]['emoji']} {eq}**")
+    match = next((n for n in FISHING_HOOKS if n.lower() == hname.strip().lower()), None)
+    if not match:
+        return await ctx.send("Unknown hook. Use `!hookshop` to see options.")
+    if match not in get_owned_hooks(user_id):
+        return await ctx.send(f"You don't own **{match}**. Buy it from `!hookshop`.")
+    hooks_equipped[user_id] = match
+    save_data()
+    await ctx.send(f"Equipped **{FISHING_HOOKS[match]['emoji']} {match}**.")
+
+
+@bot.command(aliases=["bshop"])
+async def baitshop(ctx):
+    """Browse and buy fishing bait."""
+    user_id  = ctx.author.id
+    inv      = get_bait_inventory(user_id)
+    equipped = get_equipped_bait(user_id)
+    gen_lvl  = get_general_level(user_id)
+
+    embed = discord.Embed(
+        title="🎣 Bait Shop",
+        description=(
+            f"**Equipped:** {FISHING_BAITS[equipped]['emoji']} {equipped}\n"
+            f"**General Level:** {gen_lvl}  |  **Wallet:** {format_coins(get_wallet(user_id))} coins\n\n"
+            "Bait boosts **coin rewards** per catch. Consumable bait is used once per cast."
+        ),
+        color=discord.Color.blue(),
+    )
+    for bname, bdata in FISHING_BAITS.items():
+        qty = "∞" if inv.get(bname, 0) == -1 else str(inv.get(bname, 0))
+        lvl_line = f"🔒 Level {bdata['level_req']}\n" if bdata["level_req"] > 0 else ""
+        embed.add_field(
+            name=f"{bdata['emoji']} {bname}",
+            value=(
+                f"💰 {format_coins(bdata['price'])} each\n{lvl_line}"
+                f"+{int(bdata['reward_bonus']*100)}% coins\n"
+                f"Stock: **{qty}**"
+            ),
+            inline=True,
+        )
+    embed.set_footer(text="Use !buybait <name> <amount> to purchase.")
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+async def buybait(ctx, *, args: str = None):
+    """Buy bait — usage: !buybait <name> <amount>"""
+    user_id = ctx.author.id
+    if not args:
+        return await ctx.send("Usage: `!buybait <bait name> <amount>`")
+
+    parts = args.rsplit(" ", 1)
+    if len(parts) < 2 or not parts[-1].isdigit():
+        return await ctx.send("Usage: `!buybait <bait name> <amount>`  e.g. `!buybait Shrimp 10`")
+
+    bname_raw, qty_str = parts[0].strip(), parts[1]
+    qty = int(qty_str)
+    if qty <= 0:
+        return await ctx.send("Amount must be at least 1.")
+
+    match = next((n for n in FISHING_BAITS if n.lower() == bname_raw.lower()), None)
+    if not match:
+        return await ctx.send("Unknown bait. Use `!baitshop` to see options.")
+    if match == "Worm":
+        return await ctx.send("Worm is free and unlimited — no need to buy it!")
+
+    bdata     = FISHING_BAITS[match]
+    level_req = bdata["level_req"]
+    if get_general_level(user_id) < level_req:
+        return await ctx.send(
+            f"You need **General Level {level_req}** to buy **{match}**. "
+            f"(You are Level {get_general_level(user_id)})"
+        )
+
+    total_cost = bdata["price"] * qty
+    if get_wallet(user_id) < total_cost:
+        return await ctx.send(
+            f"You need **{format_coins(total_cost)}** coins for {qty}x {match}. "
+            f"(You have {format_coins(get_wallet(user_id))})"
+        )
+
+    wallet[user_id] -= total_cost
+    inv = get_bait_inventory(user_id)
+    inv[match] = inv.get(match, 0) + qty
+    save_data()
+    await ctx.send(
+        f"Bought **{qty}x {bdata['emoji']} {match}** for **{format_coins(total_cost)}** coins!\n"
+        f"Stock: **{inv[match]}**  |  Wallet: {format_coins(get_wallet(user_id))}"
+    )
+
+
+@bot.command()
+async def bait(ctx, *, bname: str = None):
+    """Equip bait — usage: !bait <name>"""
+    user_id = ctx.author.id
+    if not bname:
+        eq  = get_equipped_bait(user_id)
+        inv = get_bait_inventory(user_id)
+        qty = "∞" if inv.get(eq, 0) == -1 else str(inv.get(eq, 0))
+        return await ctx.send(
+            f"Equipped bait: **{FISHING_BAITS[eq]['emoji']} {eq}** (Stock: {qty})"
+        )
+    match = next((n for n in FISHING_BAITS if n.lower() == bname.strip().lower()), None)
+    if not match:
+        return await ctx.send("Unknown bait. Use `!baitshop` to see options.")
+    inv = get_bait_inventory(user_id)
+    if match != "Worm" and inv.get(match, 0) <= 0:
+        return await ctx.send(
+            f"You don't have any **{match}**. Buy some with `!buybait {match} <amount>`."
+        )
+    bait_equipped[user_id] = match
+    save_data()
+    await ctx.send(f"Equipped **{FISHING_BAITS[match]['emoji']} {match}**.")
+
+
+# ======================== GENERAL LEVEL =======================================
+
+@bot.command(aliases=["rank", "lvl"])
+async def level(ctx, member: discord.Member = None):
+    """Check your (or someone else's) general level."""
+    target  = member or ctx.author
+    user_id = target.id
+    gen_lvl  = get_general_level(user_id)
+    gen_xp   = get_general_xp(user_id)
+    xp_next  = (gen_lvl + 1) * GENERAL_XP_PER_LEVEL
+    fish_lvl = get_fishing_level_value(user_id)
+
+    bar_filled = min(20, int((gen_xp % GENERAL_XP_PER_LEVEL) / GENERAL_XP_PER_LEVEL * 20))
+    bar = "█" * bar_filled + "░" * (20 - bar_filled)
+
+    embed = discord.Embed(
+        title=f"📊 {target.display_name}'s Levels",
+        color=discord.Color.purple(),
+    )
+    embed.add_field(
+        name="⬆️ General Level",
+        value=(
+            f"**Level {gen_lvl}**\n"
+            f"`{bar}` {gen_xp % GENERAL_XP_PER_LEVEL}/{GENERAL_XP_PER_LEVEL} XP\n"
+            f"Total XP: {gen_xp:,}"
+        ),
+        inline=False,
+    )
+    embed.add_field(name="🎣 Fishing Level", value=str(fish_lvl), inline=True)
+    embed.add_field(name="🪝 Hook",  value=f"{FISHING_HOOKS[get_equipped_hook(user_id)]['emoji']} {get_equipped_hook(user_id)}", inline=True)
+    embed.add_field(name="🛵 Vehicle", value=f"{DELIVERY_VEHICLES[get_equipped_vehicle(user_id)]['emoji']} {get_equipped_vehicle(user_id)}", inline=True)
+    await ctx.send(embed=embed)
 
 
 # ===== MUSIC COMMANDS =====
