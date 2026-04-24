@@ -185,24 +185,25 @@ class AllInConfirmView(discord.ui.View):
         self.stop()
 
 
-view = AllInConfirmView(ctx.author, game_name)
+@bot.command()
+async def allin(ctx, game_name):
+    view = AllInConfirmView(ctx.author, game_name)
 
-message = await ctx.send(
-    f"{ctx.author.mention} are you sure you want to {game_name.lower()} **all** your withdrawn coins?",
-    view=view
-)
+    message = await ctx.send(
+        f"{ctx.author.mention} are you sure you want to {game_name.lower()} **all** your withdrawn coins?",
+        view=view
+    )
 
-view.message = message  # important for timeout edit
+    view.message = message
 
-await view.wait()
+    await view.wait()
 
-if not view.confirmed:
-    for item in view.children:
-        item.disabled = True
-    await message.edit(view=view)
-    return False
+    if not view.confirmed:
+        for item in view.children:
+            item.disabled = True
+        await message.edit(view=view)
+        return
 
-return True
 
 
 # ============ AMOUNT PARSER ============
