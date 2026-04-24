@@ -168,8 +168,11 @@ class AllInConfirmView(discord.ui.View):
         self.stop()
 
 
-async def confirm_all_in(ctx, game_name):
-    view = AllInConfirmView(ctx.author.id, game_name)
+async def interaction_check(self, interaction: discord.Interaction):
+    if interaction.user.id != self.requester.id:
+        await interaction.response.send_message("This isn't your confirmation.", ephemeral=True)
+        return False
+    return True
     message = await ctx.send(
         f"{ctx.author.mention} are you sure you want to {game_name.lower()} **all** your withdrawn coins?",
         view=view
@@ -2448,34 +2451,26 @@ async def blackjack(ctx, bet: str = None):
 
 @bot.command(aliases=["lb", "rich"])
 async def leaderboard(ctx):
-    if not wallet:
+    all_users = set(wallet.keys()) | set(bank.keys())
+    if not all_users:
         return await ctx.send("no data yet")
 
-    # sort users by wallet balance
-    top = sorted(wallet.items(), key=lambda x: x[1], reverse=True)[:10]
+    totals = {uid: get_wallet(uid) + get_bank(uid) for uid in all_users}
+    top = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:10]
 
-    embed = discord.Embed(
-        title="📈 TOP RICHEST PLAYERS",
-        color=discord.Color.gold()
-    )
-
+    embed = discord.Embed(title="TOP RICHEST PLAYERS", color=discord.Color.gold())
     desc = ""
 
-    for i, (user_id, amount) in enumerate(top, start=1):
+    for i, (user_id, total) in enumerate(top, start=1):
         member = ctx.guild.get_member(user_id)
-
-        if member:
-            name = member.display_name
-        else:
-            name = f"User {user_id}"
-
+        name = member.display_name if member else f"User {user_id}"
         medal = "👑" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🔹"
-
-        desc += f"{medal} **{i}. {name}** — `{amount}` coins\n"
+        w = get_wallet(user_id)
+        b = get_bank(user_id)
+        desc += f"{medal} **{i}. {name}** — `{total:,}` coins (💰 {w:,} | 🏦 {b:,})\n"
 
     embed.description = desc
-    embed.set_footer(text="based on wallet balance 💰")
-
+    embed.set_footer(text="based on total coins.")
     await ctx.send(embed=embed)
 
 
