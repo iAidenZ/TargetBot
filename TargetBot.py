@@ -93,16 +93,16 @@ FISHING_RODS = {
 }
 
 FISHING_CATCHES = {
-    "small": {"emoji": "🐟", "name": "Small Fish", "reward": 120},
-    "rare": {"emoji": "🐠", "name": "Rare Fish", "reward": 300},
-    "shark": {"emoji": "🦈", "name": "Shark", "reward": 800},
-    "boot": {"emoji": "👢", "name": "Old Boot", "reward": 0},
+    "small": {"emoji": "??", "name": "Small Fish", "reward": 500},
+    "rare": {"emoji": "??", "name": "Rare Fish", "reward": 2_000},
+    "shark": {"emoji": "??", "name": "Shark", "reward": 100_000},
+    "boot": {"emoji": "??", "name": "Old Boot", "reward": 100},
 }
 
 
 def load_data():
     global farm_xp, farm_level, player_health, player_lives, player_points, wallet, bank, economy_claims, jail
-    global fishing_xp, fishing_level, fishing_rods_owned, fishing_equipped_rod
+    global fishing_xp, fishing_level, fishing_rods_owned, fishing_equipped_rod, private_bal
 
     if not os.path.exists(DATA_FILE):
         return
@@ -119,8 +119,9 @@ def load_data():
     bank = {int(k): v for k, v in data.get("bank", {}).items()}
     economy_claims = {int(k): v for k, v in data.get("economy_claims", {}).items()}
     jail = {int(k): v for k, v in data.get("jail", {}).items()}
-    fishing_xp = {int(k): v for k, v in data.get("fishing_xp", {}).items()}
+    private_bal = {int(k): v for k, v in data.get("private_bal", {}).items()}
     fishing_level = {int(k): v for k, v in data.get("fishing_level", {}).items()}
+    fishing_xp = {int(k): v for k, v in data.get("fishing_xp", {}).items()}
     fishing_rods_owned = {int(k): v for k, v in data.get("fishing_rods_owned", {}).items()}
     fishing_equipped_rod = {int(k): v for k, v in data.get("fishing_equipped_rod", {}).items()}
 
@@ -138,6 +139,7 @@ def save_data():
             "economy_claims": {str(k): v for k, v in economy_claims.items()},
             "jail": {str(k): v for k, v in jail.items()},
             "fishing_xp": {str(k): v for k, v in fishing_xp.items()},
+            "private_bal": {str(k): v for k, v in private_bal.items()},
             "fishing_level": {str(k): v for k, v in fishing_level.items()},
             "fishing_rods_owned": {str(k): v for k, v in fishing_rods_owned.items()},
             "fishing_equipped_rod": {str(k): v for k, v in fishing_equipped_rod.items()},
@@ -216,13 +218,14 @@ def build_fishing_grid(catch_position):
 
 def choose_fish_catch(rod_name):
     rod_data = FISHING_RODS[rod_name]
-    small_weight = max(10, 74 - rod_data["rare_bonus"] - rod_data["shark_bonus"])
-    rare_weight = 22 + rod_data["rare_bonus"]
-    shark_weight = 4 + rod_data["shark_bonus"]
+    boot_weight = 8
+    rare_weight = 20 + rod_data["rare_bonus"]
+    shark_weight = 2 + rod_data["shark_bonus"]
+    small_weight = max(1, 100 - boot_weight - rare_weight - shark_weight)
 
     return random.choices(
-        ["small", "rare", "shark"],
-        weights=[small_weight, rare_weight, shark_weight],
+        ["small", "rare", "shark", "boot"],
+        weights=[small_weight, rare_weight, shark_weight, boot_weight],
         k=1,
     )[0]
 
@@ -1706,12 +1709,21 @@ def get_bank(user_id):
 
 
 # === Private Balance ====
-
 @bot.command(aliases=["prv"])
 async def private(ctx):
     user = ctx.author.id
     private_bal[user] = True
-    await ctx.send("🔒 your balance is now private")
+    save_data()
+    await ctx.send("?? your balance is now private")
+
+
+@bot.command(aliases=["unprv"])
+async def unprivate(ctx):
+    user = ctx.author.id
+    private_bal.pop(user, None)
+    save_data()
+    await ctx.send("?? your balance is no longer private")
+
 
 
 # ===== CLAIM SYSTEM =====
@@ -1925,17 +1937,24 @@ async def fish(ctx):
         if guess == position:
             catch_key = choose_fish_catch(equipped)
             catch = FISHING_CATCHES[catch_key]
-            xp_gained = random.randint(20, 50)
             reward = int(catch["reward"] * rod_data["reward_multiplier"])
 
             wallet.setdefault(user_id, 0)
             wallet[user_id] += reward
-            fishing_xp[user_id] = get_fishing_xp(user_id) + xp_gained
 
-            old_level = get_fishing_level_value(user_id)
-            new_level = fishing_xp[user_id] // 100
-            fishing_level[user_id] = new_level
-            leveled_up = new_level > old_level
+            leveled_up = False
+            new_level = get_fishing_level_value(user_id)
+
+            if catch_key != "boot":
+                xp_gained = random.randint(20, 50)
+                old_level = get_fishing_level_value(user_id)
+                fishing_xp[user_id] = get_fishing_xp(user_id) + xp_gained
+                new_level = fishing_xp[user_id] // 100
+                fishing_level[user_id] = new_level
+                leveled_up = new_level > old_level
+            else:
+                xp_gained = 0
+
             save_data()
 
             result_embed = discord.Embed(
@@ -1945,7 +1964,7 @@ async def fish(ctx):
                     f"**+{format_coins(reward)} coins**\n"
                     f"**+{xp_gained} XP**"
                 ),
-                color=discord.Color.green()
+                color=discord.Color.green() if catch_key != "boot" else discord.Color.orange()
             )
             result_embed.add_field(name="Fishing Level", value=str(new_level), inline=True)
             result_embed.add_field(name="Rod", value=equipped, inline=True)
@@ -1953,7 +1972,20 @@ async def fish(ctx):
                 result_embed.add_field(name="Level Up!", value=f"You reached **Level {new_level}**!", inline=False)
         else:
             boot = FISHING_CATCHES["boot"]
+            reward = int(boot["reward"] * rod_data["reward_multiplier"])
+            wallet.setdefault(user_id, 0)
+            wallet[user_id] += reward
             save_data()
+            result_embed = discord.Embed(
+                title=f"{boot['emoji']} You caught an {boot['name']}",
+                description=(
+                    f"{grid}\n\n"
+                    "Wrong spot or too slow.\n"
+                    f"**+{format_coins(reward)} coins**"
+                ),
+                color=discord.Color.orange()
+            )
+            result_embed.add_field(name="Rod", value=equipped, inline=True)
             result_embed = discord.Embed(
                 title=f"{boot['emoji']} You caught an {boot['name']}",
                 description=(
