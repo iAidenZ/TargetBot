@@ -182,11 +182,15 @@ class AllInConfirmView(discord.ui.View):
 
 
 async def confirm_all_in(ctx, game_name):
-    view = AllInConfirmView(ctx.author.id, game_name)
+    view = AllInConfirmView(ctx.author, game_name)
+
     message = await ctx.send(
         f"{ctx.author.mention} are you sure you want to {game_name.lower()} **all** your withdrawn coins?",
         view=view
     )
+
+    view.message = message
+
     await view.wait()
 
     if not view.confirmed:
@@ -194,7 +198,7 @@ async def confirm_all_in(ctx, game_name):
             for item in view.children:
                 item.disabled = True
             await message.edit(view=view)
-        except Exception:
+        except:
             pass
         return False
 
