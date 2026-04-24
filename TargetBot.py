@@ -119,18 +119,18 @@ FISHING_CATCHES = {
 
 # ── Delivery vehicles ────────────────────────────────────────────────────────
 DELIVERY_VEHICLES = {
-    "Scooter":   {"price": 0,         "time_bonus": 0,  "reward_multiplier": 1.00, "emoji": "🛵"},
-    "Bike":      {"price": 25_000,    "time_bonus": 5,  "reward_multiplier": 1.10, "emoji": "🚲"},
-    "Car":       {"price": 200_000,   "time_bonus": 10, "reward_multiplier": 1.25, "emoji": "🚗"},
-    "Super Van": {"price": 2_000_000, "time_bonus": 20, "reward_multiplier": 1.50, "emoji": "🚀"},
+    "Scooter":   {"price": 0,         "time_bonus": 0,  "reward_multiplier": 1.00, "emoji": "🛵", "steps_normal": 5, "steps_vip": 7},
+    "Bike":      {"price": 25_000,    "time_bonus": 5,  "reward_multiplier": 1.10, "emoji": "🚲", "steps_normal": 5, "steps_vip": 6},
+    "Car":       {"price": 200_000,   "time_bonus": 10, "reward_multiplier": 1.25, "emoji": "🚗", "steps_normal": 4, "steps_vip": 5},
+    "Super Van": {"price": 2_000_000, "time_bonus": 20, "reward_multiplier": 1.50, "emoji": "🚀", "steps_normal": 3, "steps_vip": 4},
 }
 
 DELIVERY_BASE_TIME      = 20          # seconds before vehicle bonus
 DELIVERY_DIRECTIONS     = ["LEFT", "RIGHT", "FORWARD", "BACK"]
 DELIVERY_DIR_EMOJI      = {"LEFT": "⬅️", "RIGHT": "➡️", "FORWARD": "⬆️", "BACK": "⬇️"}
-DELIVERY_VIP_CHANCE     = 0.10        # 10 % chance of VIP customer
+DELIVERY_VIP_CHANCE     = 0.05        # 5 % chance of VIP customer
 DELIVERY_BASE_REWARD_NORMAL = (800,  2_500)
-DELIVERY_BASE_REWARD_VIP    = (4_000, 10_000)
+DELIVERY_BASE_REWARD_VIP    = (100_000, 100_000)
 
 
 def load_data():
@@ -3128,9 +3128,8 @@ async def delivery(ctx):
     try:
         equipped   = get_equipped_vehicle(user_id)
         vdata      = DELIVERY_VEHICLES[equipped]
-        step_count = random.randint(3, 8)
-        route      = [random.choice(DELIVERY_DIRECTIONS) for _ in range(step_count)]
         is_vip     = random.random() < DELIVERY_VIP_CHANCE
+        step_count = vdata["steps_vip"] if is_vip else vdata["steps_normal"]
         time_limit = DELIVERY_BASE_TIME + vdata["time_bonus"]
         step_timeout = time_limit / step_count
 
