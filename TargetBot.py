@@ -39,12 +39,70 @@ jerk_cooldown = {}
 jerk_active = set()
 entity_cooldown = {}
 blackjack_games = {}
+fishing_xp = {}
+fishing_level = {}
+fishing_rods_owned = {}
+fishing_equipped_rod = {}
+fishing_active = set()
 
 OWNER_ID = 756539405463978024
+
+FISHING_RODS = {
+    "Basic Rod": {
+        "price": 0,
+        "reward_multiplier": 1.0,
+        "reaction_time": 3.0,
+        "rare_bonus": 0,
+        "shark_bonus": 0,
+    },
+    "Good Rod": {
+        "price": 10_000,
+        "reward_multiplier": 1.1,
+        "reaction_time": 3.5,
+        "rare_bonus": 3,
+        "shark_bonus": 1,
+    },
+    "Pro Rod": {
+        "price": 100_000,
+        "reward_multiplier": 1.25,
+        "reaction_time": 4.0,
+        "rare_bonus": 6,
+        "shark_bonus": 2,
+    },
+    "Mythic Rod": {
+        "price": 1_000_000,
+        "reward_multiplier": 1.5,
+        "reaction_time": 5.0,
+        "rare_bonus": 10,
+        "shark_bonus": 4,
+    },
+    "OP Rod": {
+        "price": 10_000_000,
+        "reward_multiplier": 2.0,
+        "reaction_time": 6.0,
+        "rare_bonus": 18,
+        "shark_bonus": 8,
+    },
+    "Unbelievable Rod": {
+        "price": 100_000_000,
+        "reward_multiplier": 3.0,
+        "reaction_time": 7.0,
+        "rare_bonus": 30,
+        "shark_bonus": 15,
+    },
+}
+
+FISHING_CATCHES = {
+    "small": {"emoji": "🐟", "name": "Small Fish", "reward": 120},
+    "rare": {"emoji": "🐠", "name": "Rare Fish", "reward": 300},
+    "shark": {"emoji": "🦈", "name": "Shark", "reward": 800},
+    "boot": {"emoji": "👢", "name": "Old Boot", "reward": 0},
+}
 
 
 def load_data():
     global farm_xp, farm_level, player_health, player_lives, player_points, wallet, bank, economy_claims, jail
+    global fishing_xp, fishing_level, fishing_rods_owned, fishing_equipped_rod
 
     if not os.path.exists(DATA_FILE):
         return
@@ -61,6 +119,10 @@ def load_data():
     bank = {int(k): v for k, v in data.get("bank", {}).items()}
     economy_claims = {int(k): v for k, v in data.get("economy_claims", {}).items()}
     jail = {int(k): v for k, v in data.get("jail", {}).items()}
+    fishing_xp = {int(k): v for k, v in data.get("fishing_xp", {}).items()}
+    fishing_level = {int(k): v for k, v in data.get("fishing_level", {}).items()}
+    fishing_rods_owned = {int(k): v for k, v in data.get("fishing_rods_owned", {}).items()}
+    fishing_equipped_rod = {int(k): v for k, v in data.get("fishing_equipped_rod", {}).items()}
 
 
 def save_data():
@@ -74,7 +136,11 @@ def save_data():
             "wallet": {str(k): v for k, v in wallet.items()},
             "bank": {str(k): v for k, v in bank.items()},
             "economy_claims": {str(k): v for k, v in economy_claims.items()},
-            "jail": {str(k): v for k, v in jail.items()}
+            "jail": {str(k): v for k, v in jail.items()},
+            "fishing_xp": {str(k): v for k, v in fishing_xp.items()},
+            "fishing_level": {str(k): v for k, v in fishing_level.items()},
+            "fishing_rods_owned": {str(k): v for k, v in fishing_rods_owned.items()},
+            "fishing_equipped_rod": {str(k): v for k, v in fishing_equipped_rod.items()},
         }, f, indent=4)
 
 
@@ -99,6 +165,66 @@ def get_level(xp):
 
 def generate_random_word(length=5):
     return "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(length))
+
+
+def format_coins(amount):
+    return f"{amount:,}"
+
+
+def get_fishing_xp(user_id):
+    fishing_xp.setdefault(user_id, 0)
+    return fishing_xp[user_id]
+
+
+def get_fishing_level_value(user_id):
+    fishing_level.setdefault(user_id, get_fishing_xp(user_id) // 100)
+    return fishing_level[user_id]
+
+
+def get_owned_rods(user_id):
+    rods = fishing_rods_owned.setdefault(user_id, ["Basic Rod"])
+    if "Basic Rod" not in rods:
+        rods.insert(0, "Basic Rod")
+    return rods
+
+
+def get_equipped_rod(user_id):
+    equipped = fishing_equipped_rod.setdefault(user_id, "Basic Rod")
+    if equipped not in get_owned_rods(user_id):
+        equipped = "Basic Rod"
+        fishing_equipped_rod[user_id] = equipped
+    return equipped
+
+
+def find_rod_name(name):
+    wanted = str(name).strip().lower()
+    for rod_name in FISHING_RODS:
+        if rod_name.lower() == wanted:
+            return rod_name
+    return None
+
+
+def build_fishing_grid(catch_position):
+    cells = ["⬜"] * 9
+    cells[catch_position - 1] = "🐟"
+    return "\n".join([
+        " ".join(cells[0:3]),
+        " ".join(cells[3:6]),
+        " ".join(cells[6:9]),
+    ])
+
+
+def choose_fish_catch(rod_name):
+    rod_data = FISHING_RODS[rod_name]
+    small_weight = max(10, 74 - rod_data["rare_bonus"] - rod_data["shark_bonus"])
+    rare_weight = 22 + rod_data["rare_bonus"]
+    shark_weight = 4 + rod_data["shark_bonus"]
+
+    return random.choices(
+        ["small", "rare", "shark"],
+        weights=[small_weight, rare_weight, shark_weight],
+        k=1,
+    )[0]
 
 
 def parse_amount_input(raw_amount, *, balance=None, allow_all=False):
@@ -1629,6 +1755,221 @@ async def weekly(ctx):
 @bot.command()
 async def monthly(ctx):
     await claim_reward(ctx, "monthly", 15000, 2592000)
+
+
+class FishShopView(discord.ui.View):
+    def __init__(self, requester, user_id):
+        super().__init__(timeout=120)
+        self.requester = requester
+        self.user_id = user_id
+
+        for rod_name, rod_data in FISHING_RODS.items():
+            style = discord.ButtonStyle.success if rod_data["price"] == 0 else discord.ButtonStyle.primary
+            button = discord.ui.Button(
+                label=rod_name,
+                style=style,
+                row=0 if len(self.children) < 5 else 1
+            )
+            button.callback = self.make_callback(rod_name)
+            self.add_item(button)
+
+    def make_callback(self, rod_name):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.requester.id:
+                await interaction.response.send_message("This isn't your fish shop.", ephemeral=True)
+                return
+
+            owned = get_owned_rods(self.user_id)
+            if rod_name in owned:
+                await interaction.response.send_message(f"You already own **{rod_name}**.", ephemeral=True)
+                return
+
+            price = FISHING_RODS[rod_name]["price"]
+            if get_wallet(self.user_id) < price:
+                await interaction.response.send_message(
+                    f"You need **{format_coins(price)}** coins for **{rod_name}**.",
+                    ephemeral=True
+                )
+                return
+
+            wallet[self.user_id] -= price
+            owned.append(rod_name)
+            save_data()
+            await interaction.response.send_message(
+                f"Bought **{rod_name}** for **{format_coins(price)}** coins. Use `!rod {rod_name}` to equip it.",
+                ephemeral=True
+            )
+
+        return callback
+
+
+@bot.command()
+async def fishshop(ctx):
+    user_id = ctx.author.id
+    owned = get_owned_rods(user_id)
+    equipped = get_equipped_rod(user_id)
+    level = get_fishing_level_value(user_id)
+    xp = get_fishing_xp(user_id)
+
+    embed = discord.Embed(
+        title="🎣 Fishing Rod Shop",
+        description=(
+            f"**Fishing Level:** {level}\n"
+            f"**Fishing XP:** {xp}\n"
+            f"**Equipped Rod:** {equipped}\n"
+            f"**Wallet:** {format_coins(get_wallet(user_id))} coins"
+        ),
+        color=discord.Color.blurple()
+    )
+
+    for rod_name, rod_data in FISHING_RODS.items():
+        status = "Owned" if rod_name in owned else f"Price: {format_coins(rod_data['price'])}"
+        embed.add_field(
+            name=rod_name,
+            value=(
+                f"{status}\n"
+                f"Reward x{rod_data['reward_multiplier']}\n"
+                f"Reaction: {rod_data['reaction_time']}s"
+            ),
+            inline=False
+        )
+
+    embed.set_footer(text="Use the buttons to buy rods, then equip one with !rod <name>.")
+    await ctx.send(embed=embed, view=FishShopView(ctx.author, user_id))
+
+
+@bot.command()
+async def rod(ctx, *, rod_name: str = None):
+    user_id = ctx.author.id
+
+    if not rod_name:
+        equipped = get_equipped_rod(user_id)
+        await ctx.send(f"Your equipped rod is **{equipped}**.")
+        return
+
+    matched_rod = find_rod_name(rod_name)
+    if not matched_rod:
+        await ctx.send("Unknown rod. Use `!fishshop` to see available rods.")
+        return
+
+    if matched_rod not in get_owned_rods(user_id):
+        await ctx.send(f"You don't own **{matched_rod}** yet.")
+        return
+
+    fishing_equipped_rod[user_id] = matched_rod
+    save_data()
+    await ctx.send(f"Equipped **{matched_rod}**.")
+
+
+@bot.command()
+async def fish(ctx):
+    user_id = ctx.author.id
+
+    if user_id in fishing_active:
+        await ctx.send("You're already fishing right now.")
+        return
+
+    fishing_active.add(user_id)
+
+    try:
+        owned = get_owned_rods(user_id)
+        equipped = get_equipped_rod(user_id)
+        if equipped not in owned:
+            equipped = "Basic Rod"
+            fishing_equipped_rod[user_id] = equipped
+
+        rod_data = FISHING_RODS[equipped]
+
+        waiting_embed = discord.Embed(
+            title="🎣 Fishing Time",
+            description="You threw your bait into the water...\n\nWaiting for a fish...",
+            color=discord.Color.blurple()
+        )
+        waiting_embed.set_footer(text=f"Rod: {equipped}")
+
+        game_message = await ctx.send(embed=waiting_embed)
+
+        await asyncio.sleep(2)
+
+        position = random.randint(1, 9)
+        grid = build_fishing_grid(position)
+
+        prompt_embed = discord.Embed(
+            title="🎣 A Fish Appeared!",
+            description=(
+                f"{grid}\n\n"
+                "Quick! Type the position **(1-9)**!\n\n"
+                "**Positions:**\n"
+                "`1 2 3`\n"
+                "`4 5 6`\n"
+                "`7 8 9`"
+            ),
+            color=discord.Color.blue()
+        )
+        prompt_embed.set_footer(text=f"Rod: {equipped} • Time: {rod_data['reaction_time']}s")
+        await game_message.edit(embed=prompt_embed)
+
+        def check(message):
+            return (
+                message.author.id == user_id
+                and message.channel == ctx.channel
+                and message.content.strip() in {str(i) for i in range(1, 10)}
+            )
+
+        try:
+            reply = await bot.wait_for("message", timeout=rod_data["reaction_time"], check=check)
+            guess = int(reply.content.strip())
+        except asyncio.TimeoutError:
+            guess = None
+
+        if guess == position:
+            catch_key = choose_fish_catch(equipped)
+            catch = FISHING_CATCHES[catch_key]
+            xp_gained = random.randint(20, 50)
+            reward = int(catch["reward"] * rod_data["reward_multiplier"])
+
+            wallet.setdefault(user_id, 0)
+            wallet[user_id] += reward
+            fishing_xp[user_id] = get_fishing_xp(user_id) + xp_gained
+
+            old_level = get_fishing_level_value(user_id)
+            new_level = fishing_xp[user_id] // 100
+            fishing_level[user_id] = new_level
+            leveled_up = new_level > old_level
+            save_data()
+
+            result_embed = discord.Embed(
+                title=f"{catch['emoji']} You got a {catch['name']}!",
+                description=(
+                    f"{grid}\n\n"
+                    f"**+{format_coins(reward)} coins**\n"
+                    f"**+{xp_gained} XP**"
+                ),
+                color=discord.Color.green()
+            )
+            result_embed.add_field(name="Fishing Level", value=str(new_level), inline=True)
+            result_embed.add_field(name="Rod", value=equipped, inline=True)
+            if leveled_up:
+                result_embed.add_field(name="Level Up!", value=f"You reached **Level {new_level}**!", inline=False)
+        else:
+            boot = FISHING_CATCHES["boot"]
+            save_data()
+            result_embed = discord.Embed(
+                title=f"{boot['emoji']} You caught an {boot['name']}",
+                description=(
+                    f"{grid}\n\n"
+                    "Wrong spot or too slow.\n"
+                    "**+0 coins**"
+                ),
+                color=discord.Color.orange()
+            )
+            result_embed.add_field(name="Rod", value=equipped, inline=True)
+
+        result_embed.set_footer(text=f"Wallet: {format_coins(get_wallet(user_id))} coins")
+        await game_message.edit(embed=result_embed)
+
+    finally:
+        fishing_active.discard(user_id)
 
 
 # ============== Owner Power =============
