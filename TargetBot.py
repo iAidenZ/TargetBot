@@ -45,6 +45,11 @@ fishing_rods_owned = {}
 fishing_equipped_rod = {}
 fishing_active = set()
 
+# ── Delivery system ──────────────────────────────────────────────────────────
+delivery_active = set()
+delivery_vehicles_owned: dict[int, list] = {}
+delivery_equipped_vehicle: dict[int, str] = {}
+
 OWNER_ID = 756539405463978024
 
 FISHING_RODS = {
@@ -93,16 +98,45 @@ FISHING_RODS = {
 }
 
 FISHING_CATCHES = {
-    "small": {"emoji": "??", "name": "Small Fish", "reward": 500},
-    "rare": {"emoji": "??", "name": "Rare Fish", "reward": 2_000},
-    "shark": {"emoji": "??", "name": "Shark", "reward": 100_000},
-    "boot": {"emoji": "??", "name": "Old Boot", "reward": 100},
+    "small":  {"emoji": "🐟",  "name": "Small Fish",  "reward": 500},
+    "rare":   {"emoji": "🐠",  "name": "Rare Fish",   "reward": 2_000},
+    "shark":  {"emoji": "🦈",  "name": "Shark",       "reward": 100_000},
+    "boot":   {"emoji": "👢",  "name": "Old Boot",    "reward": 100},
+    # ── Legendary fish ──────────────────────────────────────────────────
+    "kraken": {
+        "emoji": "🦑",
+        "name":  "Kraken",
+        "base_reward":   1_000_000,
+        "base_chance":   0.001,          # 0.1 % at Lv 1 / Basic Rod
+    },
+    "bloop":  {
+        "emoji": "🌊",
+        "name":  "Bloop",
+        "base_reward":   3_000_000,
+        "base_chance":   0.0005,         # 0.05 % at Lv 1 / Basic Rod
+    },
 }
+
+# ── Delivery vehicles ────────────────────────────────────────────────────────
+DELIVERY_VEHICLES = {
+    "Scooter":   {"price": 0,         "time_bonus": 0,  "reward_multiplier": 1.00, "emoji": "🛵"},
+    "Bike":      {"price": 25_000,    "time_bonus": 5,  "reward_multiplier": 1.10, "emoji": "🚲"},
+    "Car":       {"price": 200_000,   "time_bonus": 10, "reward_multiplier": 1.25, "emoji": "🚗"},
+    "Super Van": {"price": 2_000_000, "time_bonus": 20, "reward_multiplier": 1.50, "emoji": "🚀"},
+}
+
+DELIVERY_BASE_TIME      = 20          # seconds before vehicle bonus
+DELIVERY_DIRECTIONS     = ["LEFT", "RIGHT", "FORWARD", "BACK"]
+DELIVERY_DIR_EMOJI      = {"LEFT": "⬅️", "RIGHT": "➡️", "FORWARD": "⬆️", "BACK": "⬇️"}
+DELIVERY_VIP_CHANCE     = 0.10        # 10 % chance of VIP customer
+DELIVERY_BASE_REWARD_NORMAL = (800,  2_500)
+DELIVERY_BASE_REWARD_VIP    = (4_000, 10_000)
 
 
 def load_data():
     global farm_xp, farm_level, player_health, player_lives, player_points, wallet, bank, economy_claims, jail
     global fishing_xp, fishing_level, fishing_rods_owned, fishing_equipped_rod, private_bal
+    global delivery_vehicles_owned, delivery_equipped_vehicle
 
     if not os.path.exists(DATA_FILE):
         return
@@ -124,6 +158,8 @@ def load_data():
     fishing_xp = {int(k): v for k, v in data.get("fishing_xp", {}).items()}
     fishing_rods_owned = {int(k): v for k, v in data.get("fishing_rods_owned", {}).items()}
     fishing_equipped_rod = {int(k): v for k, v in data.get("fishing_equipped_rod", {}).items()}
+    delivery_vehicles_owned = {int(k): v for k, v in data.get("delivery_vehicles_owned", {}).items()}
+    delivery_equipped_vehicle = {int(k): v for k, v in data.get("delivery_equipped_vehicle", {}).items()}
 
 
 def save_data():
@@ -143,6 +179,8 @@ def save_data():
             "fishing_level": {str(k): v for k, v in fishing_level.items()},
             "fishing_rods_owned": {str(k): v for k, v in fishing_rods_owned.items()},
             "fishing_equipped_rod": {str(k): v for k, v in fishing_equipped_rod.items()},
+            "delivery_vehicles_owned": {str(k): v for k, v in delivery_vehicles_owned.items()},
+            "delivery_equipped_vehicle": {str(k): v for k, v in delivery_equipped_vehicle.items()},
         }, f, indent=4)
 
 
@@ -228,6 +266,46 @@ def choose_fish_catch(rod_name):
         weights=[small_weight, rare_weight, shark_weight, boot_weight],
         k=1,
     )[0]
+
+
+def _legendary_chance_multiplier(fishing_level_val: int, rare_bonus: int) -> float:
+    """
+    Scales legendary spawn chance slightly with progression.
+    Max multiplier is capped at 3.0x to keep both fish endgame-rare.
+      - Level 0  / Basic Rod  → 1.00x  (base chance)
+      - Level 50 / OP Rod     → ≈ 2.1x
+      - Level 100/ Unbelievable → ≈ 3.0x
+    """
+    level_factor = 1.0 + min(fishing_level_val, 100) * 0.01   # up to +100 %
+    rod_factor   = 1.0 + min(rare_bonus, 30)        * 0.033   # up to +99 %
+    return min(level_factor * rod_factor, 3.0)
+
+
+def check_legendary_catch(rod_name: str, fishing_level_val: int) -> str | None:
+    """
+    Independent lottery for Kraken / Bloop before the normal catch table.
+    Returns 'kraken', 'bloop', or None.
+    """
+    rod_data   = FISHING_RODS[rod_name]
+    multiplier = _legendary_chance_multiplier(fishing_level_val, rod_data["rare_bonus"])
+
+    kraken_chance = FISHING_CATCHES["kraken"]["base_chance"] * multiplier
+    bloop_chance  = FISHING_CATCHES["bloop"]["base_chance"]  * multiplier
+
+    roll = random.random()
+    if roll < bloop_chance:         # Bloop checked first (rarer, so narrower window)
+        return "bloop"
+    if roll < bloop_chance + kraken_chance:
+        return "kraken"
+    return None
+
+
+def legendary_reward(catch_key: str, rod_name: str, fishing_level_val: int) -> int:
+    """Scales legendary fish coin reward with rod multiplier and level."""
+    base          = FISHING_CATCHES[catch_key]["base_reward"]
+    rod_mult      = FISHING_RODS[rod_name]["reward_multiplier"]
+    level_bonus   = 1.0 + min(fishing_level_val, 100) * 0.005   # up to +50 %
+    return int(base * rod_mult * level_bonus)
 
 
 def parse_amount_input(raw_amount, *, balance=None, allow_all=False):
@@ -1935,9 +2013,20 @@ async def fish(ctx):
             guess = None
 
         if guess == position:
-            catch_key = choose_fish_catch(equipped)
-            catch = FISHING_CATCHES[catch_key]
-            reward = int(catch["reward"] * rod_data["reward_multiplier"])
+            fishing_level_val = get_fishing_level_value(user_id)
+
+            # ── Legendary check (independent lottery) ───────────────────────
+            legendary_key = check_legendary_catch(equipped, fishing_level_val)
+
+            if legendary_key:
+                catch_key = legendary_key
+                catch     = FISHING_CATCHES[catch_key]
+                reward    = legendary_reward(catch_key, equipped, fishing_level_val)
+            else:
+                catch_key = choose_fish_catch(equipped)
+                catch     = FISHING_CATCHES[catch_key]
+                reward    = int(catch["reward"] * rod_data["reward_multiplier"])
+            # ────────────────────────────────────────────────────────────────
 
             wallet.setdefault(user_id, 0)
             wallet[user_id] += reward
@@ -1945,7 +2034,7 @@ async def fish(ctx):
             leveled_up = False
             new_level = get_fishing_level_value(user_id)
 
-            if catch_key != "boot":
+            if catch_key not in ("boot",):
                 xp_gained = random.randint(20, 50)
                 old_level = get_fishing_level_value(user_id)
                 fishing_xp[user_id] = get_fishing_xp(user_id) + xp_gained
@@ -1957,15 +2046,28 @@ async def fish(ctx):
 
             save_data()
 
-            result_embed = discord.Embed(
-                title=f"{catch['emoji']} You got a {catch['name']}!",
-                description=(
-                    f"{grid}\n\n"
-                    f"**+{format_coins(reward)} coins**\n"
-                    f"**+{xp_gained} XP**"
-                ),
-                color=discord.Color.green() if catch_key != "boot" else discord.Color.orange()
-            )
+            if legendary_key:
+                # Legendary catch — special embed
+                result_embed = discord.Embed(
+                    title=f"🌟 LEGENDARY CATCH! {catch['emoji']} {catch['name']}!",
+                    description=(
+                        f"{grid}\n\n"
+                        f"⚠️ You pulled up a **{catch['name']}** from the depths!\n\n"
+                        f"**+{format_coins(reward)} coins**\n"
+                        f"**+{xp_gained} XP**"
+                    ),
+                    color=discord.Color.gold()
+                )
+            else:
+                result_embed = discord.Embed(
+                    title=f"{catch['emoji']} You got a {catch['name']}!",
+                    description=(
+                        f"{grid}\n\n"
+                        f"**+{format_coins(reward)} coins**\n"
+                        f"**+{xp_gained} XP**"
+                    ),
+                    color=discord.Color.green() if catch_key != "boot" else discord.Color.orange()
+                )
             result_embed.add_field(name="Fishing Level", value=str(new_level), inline=True)
             result_embed.add_field(name="Rod", value=equipped, inline=True)
             if leveled_up:
@@ -2862,6 +2964,290 @@ async def leaderboard(ctx):
     embed.description = desc
     embed.set_footer(text="based on total coins.")
     await ctx.send(embed=embed)
+
+
+# ======================== DELIVERY SYSTEM ====================================
+
+# ── Vehicle helpers ───────────────────────────────────────────────────────────
+def get_owned_vehicles(user_id: int) -> list:
+    vehicles = delivery_vehicles_owned.setdefault(user_id, ["Scooter"])
+    if "Scooter" not in vehicles:
+        vehicles.insert(0, "Scooter")
+    return vehicles
+
+
+def get_equipped_vehicle(user_id: int) -> str:
+    equipped = delivery_equipped_vehicle.setdefault(user_id, "Scooter")
+    if equipped not in get_owned_vehicles(user_id):
+        equipped = "Scooter"
+        delivery_equipped_vehicle[user_id] = equipped
+    return equipped
+
+
+# ── Vehicle shop UI ──────────────────────────────────────────────────────────
+class VehicleShopView(discord.ui.View):
+    def __init__(self, requester, user_id: int):
+        super().__init__(timeout=120)
+        self.requester = requester
+        self.user_id   = user_id
+
+        for vname, vdata in DELIVERY_VEHICLES.items():
+            style  = discord.ButtonStyle.success if vdata["price"] == 0 else discord.ButtonStyle.primary
+            button = discord.ui.Button(
+                label=f"{vdata['emoji']} {vname}",
+                style=style,
+                row=0 if len(self.children) < 3 else 1,
+            )
+            button.callback = self._make_callback(vname)
+            self.add_item(button)
+
+    def _make_callback(self, vname: str):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.requester.id:
+                await interaction.response.send_message("This isn't your shop.", ephemeral=True)
+                return
+            owned = get_owned_vehicles(self.user_id)
+            if vname in owned:
+                delivery_equipped_vehicle[self.user_id] = vname
+                save_data()
+                await interaction.response.send_message(
+                    f"Equipped **{DELIVERY_VEHICLES[vname]['emoji']} {vname}**.", ephemeral=True
+                )
+                return
+            price = DELIVERY_VEHICLES[vname]["price"]
+            if get_wallet(self.user_id) < price:
+                await interaction.response.send_message(
+                    f"You need **{format_coins(price)}** coins for **{vname}**.", ephemeral=True
+                )
+                return
+            wallet[self.user_id] -= price
+            owned.append(vname)
+            delivery_equipped_vehicle[self.user_id] = vname
+            save_data()
+            await interaction.response.send_message(
+                f"Bought & equipped **{DELIVERY_VEHICLES[vname]['emoji']} {vname}** "
+                f"for **{format_coins(price)}** coins!",
+                ephemeral=True,
+            )
+        return callback
+
+
+@bot.command(aliases=["vshop"])
+async def vehicleshop(ctx):
+    """Browse and buy delivery vehicles."""
+    user_id  = ctx.author.id
+    owned    = get_owned_vehicles(user_id)
+    equipped = get_equipped_vehicle(user_id)
+
+    embed = discord.Embed(
+        title="🚗 Delivery Vehicle Shop",
+        description=(
+            f"**Equipped:** {DELIVERY_VEHICLES[equipped]['emoji']} {equipped}\n"
+            f"**Wallet:** {format_coins(get_wallet(user_id))} coins\n\n"
+            "Click a button to **buy** or **equip** a vehicle."
+        ),
+        color=discord.Color.blurple(),
+    )
+    for vname, vdata in DELIVERY_VEHICLES.items():
+        status = "✅ Owned" if vname in owned else f"💰 {format_coins(vdata['price'])}"
+        embed.add_field(
+            name=f"{vdata['emoji']} {vname}",
+            value=(
+                f"{status}\n"
+                f"⏱️ +{vdata['time_bonus']}s  |  💵 x{vdata['reward_multiplier']}"
+            ),
+            inline=True,
+        )
+    await ctx.send(embed=embed, view=VehicleShopView(ctx.author, user_id))
+
+
+@bot.command(aliases=["veh"])
+async def vehicle(ctx, *, vname: str = None):
+    """Equip a vehicle you own."""
+    user_id = ctx.author.id
+    if not vname:
+        eq = get_equipped_vehicle(user_id)
+        return await ctx.send(
+            f"Your equipped vehicle: **{DELIVERY_VEHICLES[eq]['emoji']} {eq}**"
+        )
+    match = next(
+        (n for n in DELIVERY_VEHICLES if n.lower() == vname.strip().lower()), None
+    )
+    if not match:
+        return await ctx.send("Unknown vehicle. Use `!vehicleshop` to see options.")
+    if match not in get_owned_vehicles(user_id):
+        return await ctx.send(f"You don't own **{match}** yet. Buy it from `!vehicleshop`.")
+    delivery_equipped_vehicle[user_id] = match
+    save_data()
+    await ctx.send(f"Equipped **{DELIVERY_VEHICLES[match]['emoji']} {match}**.")
+
+
+# ── Delivery minigame UI ─────────────────────────────────────────────────────
+class DeliveryView(discord.ui.View):
+    """One button row for a single delivery step."""
+    def __init__(self, requester_id: int, correct_direction: str, timeout: float):
+        super().__init__(timeout=timeout)
+        self.requester_id      = requester_id
+        self.correct_direction = correct_direction
+        self.result            = None  # "correct" | "wrong" | None (timeout)
+
+        for direction in DELIVERY_DIRECTIONS:
+            btn = discord.ui.Button(
+                label=DELIVERY_DIR_EMOJI[direction],
+                style=discord.ButtonStyle.primary,
+            )
+            btn.callback = self._make_cb(direction)
+            self.add_item(btn)
+
+    def _make_cb(self, direction: str):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.requester_id:
+                await interaction.response.send_message(
+                    "This isn't your delivery!", ephemeral=True
+                )
+                return
+            self.result = "correct" if direction == self.correct_direction else "wrong"
+            for item in self.children:
+                item.disabled = True
+            await interaction.response.edit_message(view=self)
+            self.stop()
+        return callback
+
+
+@bot.command()
+@commands.cooldown(1, 15, commands.BucketType.user)
+async def delivery(ctx):
+    """Start a timed delivery minigame."""
+    user_id = ctx.author.id
+
+    if user_id in delivery_active:
+        return await ctx.send("You're already on a delivery!")
+
+    delivery_active.add(user_id)
+
+    try:
+        equipped   = get_equipped_vehicle(user_id)
+        vdata      = DELIVERY_VEHICLES[equipped]
+        step_count = random.randint(3, 8)
+        route      = [random.choice(DELIVERY_DIRECTIONS) for _ in range(step_count)]
+        is_vip     = random.random() < DELIVERY_VIP_CHANCE
+        time_limit = DELIVERY_BASE_TIME + vdata["time_bonus"]
+        step_timeout = time_limit / step_count
+
+        customer_label    = "⭐ **VIP Customer**" if is_vip else "👤 Normal Customer"
+        base_reward_range = DELIVERY_BASE_REWARD_VIP if is_vip else DELIVERY_BASE_REWARD_NORMAL
+
+        intro_embed = discord.Embed(
+            title="🚦 Delivery Started!",
+            description=(
+                f"**Vehicle:** {vdata['emoji']} {equipped}\n"
+                f"**Customer:** {customer_label}\n"
+                f"**Route:** {step_count} steps\n"
+                f"**Time per step:** {step_timeout:.1f}s\n\n"
+                "Follow the directions — click the correct button fast!"
+            ),
+            color=discord.Color.blurple(),
+        )
+        msg = await ctx.send(embed=intro_embed)
+        await asyncio.sleep(1.5)
+
+        start_time  = time.monotonic()
+        failed      = False
+        fail_reason = ""
+
+        for step_idx, direction in enumerate(route, start=1):
+            step_embed = discord.Embed(
+                title=f"🚦 Delivery — Step {step_idx}/{step_count}",
+                description=(
+                    f"**Direction:** {DELIVERY_DIR_EMOJI[direction]} **{direction}**\n\n"
+                    f"⬅️ LEFT  |  ➡️ RIGHT  |  ⬆️ FORWARD  |  ⬇️ BACK\n\n"
+                    f"⏱️ You have **{step_timeout:.1f}s** per step."
+                ),
+                color=discord.Color.orange(),
+            )
+            step_embed.set_footer(
+                text=f"Vehicle: {vdata['emoji']} {equipped}  •  "
+                     f"Customer: {'VIP ⭐' if is_vip else 'Normal'}"
+            )
+            view = DeliveryView(user_id, direction, timeout=step_timeout)
+            await msg.edit(embed=step_embed, view=view)
+            await view.wait()
+
+            if view.result is None:
+                failed      = True
+                fail_reason = "⏱️ You ran out of time!"
+                break
+            if view.result == "wrong":
+                failed      = True
+                fail_reason = "❌ Wrong direction — package dropped!"
+                break
+
+        elapsed = time.monotonic() - start_time
+
+        if failed:
+            fail_embed = discord.Embed(
+                title="📦 Delivery Failed!",
+                description=(
+                    f"{fail_reason}\n\n"
+                    "Better luck next time. Use `!delivery` to try again."
+                ),
+                color=discord.Color.red(),
+            )
+            fail_embed.set_footer(text=f"Vehicle: {vdata['emoji']} {equipped}")
+            await msg.edit(embed=fail_embed, view=None)
+            return
+
+        # ── Success — calculate reward ────────────────────────────────────
+        base_reward  = random.randint(*base_reward_range)
+        speed_ratio  = max(0.0, 1.0 - (elapsed / time_limit))
+        speed_bonus  = 1.0 + speed_ratio * 0.5          # up to +50 %
+        final_reward = int(base_reward * vdata["reward_multiplier"] * speed_bonus)
+
+        wallet.setdefault(user_id, 0)
+        wallet[user_id] += final_reward
+        save_data()
+
+        speed_label = (
+            "🔥 Lightning!" if speed_ratio > 0.75 else
+            "✅ Fast"        if speed_ratio > 0.40 else
+            "🐢 Just in time"
+        )
+
+        success_embed = discord.Embed(
+            title="📦 Delivery Complete!",
+            description=(
+                f"You delivered the package successfully!\n\n"
+                f"**Customer:** {customer_label}\n"
+                f"**Route length:** {step_count} steps\n"
+                f"**Completion:** {speed_label} ({elapsed:.1f}s / {time_limit}s)\n\n"
+                f"💰 **+{format_coins(final_reward)} coins**"
+            ),
+            color=discord.Color.green(),
+        )
+        success_embed.add_field(
+            name="Breakdown",
+            value=(
+                f"Base: {format_coins(base_reward)}\n"
+                f"Vehicle bonus: x{vdata['reward_multiplier']}\n"
+                f"Speed bonus: x{speed_bonus:.2f}"
+            ),
+            inline=False,
+        )
+        success_embed.set_footer(text=f"Wallet: {format_coins(get_wallet(user_id))} coins")
+        await msg.edit(embed=success_embed, view=None)
+
+    finally:
+        delivery_active.discard(user_id)
+
+
+@delivery.error
+async def delivery_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(
+            f"⏳ Cooldown! Start another delivery in **{error.retry_after:.1f}s**."
+        )
+    else:
+        raise error
 
 
 # ===== MUSIC COMMANDS =====
