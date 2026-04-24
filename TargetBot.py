@@ -140,10 +140,14 @@ class AllInConfirmView(discord.ui.View):
         self.requester = requester
         self.game_name = game_name
         self.confirmed = False
+        self.message = None
 
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.requester.id:
-            await interaction.response.send_message("This isn't your confirmation.", ephemeral=True)
+            await interaction.response.send_message(
+                "This isn't your confirmation.",
+                ephemeral=True
+            )
             return False
         return True
 
@@ -151,44 +155,54 @@ class AllInConfirmView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
+        if self.message:
+            await self.message.edit(
+                content="Timed out.",
+                view=self
+            )
+
     @discord.ui.button(label="Yes, go all in", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.confirmed = True
+
         for item in self.children:
             item.disabled = True
+
         await interaction.response.edit_message(view=self)
         self.stop()
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.confirmed = False
+
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content=f"{self.game_name} all-in cancelled.", view=self)
+
+        await interaction.response.edit_message(
+            content=f"{self.game_name} all-in cancelled.",
+            view=self
+        )
         self.stop()
 
 
-async def interaction_check(self, interaction: discord.Interaction):
-    if interaction.user.id != self.requester.id:
-        await interaction.response.send_message("This isn't your confirmation.", ephemeral=True)
-        return False
-    return True
-    message = await ctx.send(
-        f"{ctx.author.mention} are you sure you want to {game_name.lower()} **all** your withdrawn coins?",
-        view=view
-    )
-    await view.wait()
+view = AllInConfirmView(ctx.author, game_name)
 
-    if not view.confirmed:
-        try:
-            for item in view.children:
-                item.disabled = True
-            await message.edit(view=view)
-        except Exception:
-            pass
-        return False
+message = await ctx.send(
+    f"{ctx.author.mention} are you sure you want to {game_name.lower()} **all** your withdrawn coins?",
+    view=view
+)
 
-    return True
+view.message = message  # important for timeout edit
+
+await view.wait()
+
+if not view.confirmed:
+    for item in view.children:
+        item.disabled = True
+    await message.edit(view=view)
+    return False
+
+return True
 
 
 # ============ AMOUNT PARSER ============
