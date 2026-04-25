@@ -705,11 +705,50 @@ def clean_lyrics_title(text):
         return ""
 
     cleaned = text
+    cleaned = re.sub(r"https?://\S+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bby\s+[A-Za-z0-9_.-]+\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\([^)]*(official|video|audio|lyrics?|visualizer|hd|4k)[^)]*\)", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\[[^\]]*(official|video|audio|lyrics?|visualizer|hd|4k)[^\]]*\]", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\b(official video|official audio|lyrics video|lyric video|visualizer|audio|lyrics|hd|4k)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\(([^)]*(?:prod|producer|slowed|speed up|sped up|reverb|remix|edit|nightcore|bass boosted|snippet|mashup|version|cover|live|extended|instrumental|performance)[^)]*)\)", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\[([^\]]*(?:prod|producer|slowed|speed up|sped up|reverb|remix|edit|nightcore|bass boosted|snippet|mashup|version|cover|live|extended|instrumental|performance)[^\]]*)\]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(official video|official audio|lyrics video|lyric video|visualizer|audio|lyrics|hd|4k|prod\.?\s+by|produced by|slowed(?:\s*\+\s*reverb)?|sped up|speed up|reverb|nightcore|bass boosted|snippet|mashup|extended|instrumental|live performance|live version)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bft\.?\b", "feat", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bfeat\.?\s+[^-|\n]+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bwith\s+[^-|\n]+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*[|/]\s*.*$", "", cleaned)
+    cleaned = re.sub(r"\s*[-–—]\s*(?:prod.*|slowed.*|sped up.*|reverb.*|remix.*|edit.*|nightcore.*|bass boosted.*)$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*[-–—]\s*$", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
     return cleaned.strip()
+
+
+def build_lyrics_search_variants(text):
+    cleaned = clean_lyrics_title(text)
+    variants = []
+
+    def add_variant(value):
+        value = clean_lyrics_title(value)
+        key = value.lower()
+        if value and key not in seen:
+            seen.add(key)
+            variants.append(value)
+
+    seen = set()
+    add_variant(cleaned)
+
+    dash_parts = [part.strip() for part in re.split(r"\s[-–—]\s", cleaned) if part.strip()]
+    if len(dash_parts) >= 2:
+        add_variant(f"{dash_parts[0]} - {dash_parts[1]}")
+        add_variant(dash_parts[1])
+        add_variant(dash_parts[0])
+
+    no_feat = re.sub(r"\bfeat\b.*$", "", cleaned, flags=re.IGNORECASE).strip(" -")
+    add_variant(no_feat)
+
+    no_paren = re.sub(r"\([^)]*\)", "", cleaned).strip(" -")
+    add_variant(no_paren)
+
+    return variants
 
 
 def split_lyrics_chunks(text, chunk_size=1800):
@@ -773,19 +812,23 @@ def build_lyrics_embed(found_label, chunks, page_index, source_url=None):
 
 
 def build_lyrics_queries(title, artist, track):
-    cleaned_title = clean_lyrics_title(title)
-    cleaned_track = clean_lyrics_title(track or title)
+    title_variants = build_lyrics_search_variants(title)
+    track_variants = build_lyrics_search_variants(track or title)
+    cleaned_title = title_variants[0] if title_variants else clean_lyrics_title(title)
+    cleaned_track = track_variants[0] if track_variants else clean_lyrics_title(track or title)
     cleaned_artist = clean_lyrics_title(artist or "")
 
     queries = []
-    if cleaned_artist and cleaned_track:
-        queries.append(f"{cleaned_artist} {cleaned_track}")
-        queries.append(f"{cleaned_track} {cleaned_artist}")
-        queries.append(f"{cleaned_artist} - {cleaned_track}")
-    if cleaned_track:
-        queries.append(cleaned_track)
-    if cleaned_title:
-        queries.append(cleaned_title)
+    for track_variant in track_variants or [cleaned_track]:
+        if cleaned_artist and track_variant:
+            queries.append(f"{cleaned_artist} {track_variant}")
+            queries.append(f"{track_variant} {cleaned_artist}")
+            queries.append(f"{cleaned_artist} - {track_variant}")
+        if track_variant:
+            queries.append(track_variant)
+    for title_variant in title_variants or [cleaned_title]:
+        if title_variant:
+            queries.append(title_variant)
     if title and title not in queries:
         queries.append(title)
 
@@ -800,13 +843,16 @@ def build_lyrics_queries(title, artist, track):
 
 
 def build_lyrics_pairs(title, artist, track):
-    cleaned_title = clean_lyrics_title(title)
-    cleaned_track = clean_lyrics_title(track or title)
+    title_variants = build_lyrics_search_variants(title)
+    track_variants = build_lyrics_search_variants(track or title)
+    cleaned_title = title_variants[0] if title_variants else clean_lyrics_title(title)
+    cleaned_track = track_variants[0] if track_variants else clean_lyrics_title(track or title)
     cleaned_artist = clean_lyrics_title(artist or "")
 
     pairs = []
-    if cleaned_artist and cleaned_track:
-        pairs.append((cleaned_artist, cleaned_track))
+    for track_variant in track_variants or [cleaned_track]:
+        if cleaned_artist and track_variant:
+            pairs.append((cleaned_artist, track_variant))
     if cleaned_artist and cleaned_title and cleaned_title != cleaned_track:
         pairs.append((cleaned_artist, cleaned_title))
 
@@ -1114,11 +1160,17 @@ def fetch_ovh_lyrics(title, artist, track, source_url):
     return None
 
 
-def fetch_lyrics_payload(current):
-    title = current.title
-    artist = getattr(current, "artist", None)
-    track = getattr(current, "track", None)
-    source_url = getattr(current, "webpage_url", None)
+def fetch_lyrics_payload(current=None, manual_query=None):
+    if manual_query:
+        title = manual_query
+        artist = None
+        track = manual_query
+        source_url = getattr(current, "webpage_url", None) if current else None
+    else:
+        title = current.title
+        artist = getattr(current, "artist", None)
+        track = getattr(current, "track", None)
+        source_url = getattr(current, "webpage_url", None)
 
     genius_result = fetch_genius_lyrics(title, artist, track)
     if genius_result:
@@ -1148,7 +1200,6 @@ class LyricsPaginatorView(discord.ui.View):
         self.source_url = source_url
         self.page_index = 0
         self.message = None
-        music_autoplay.setdefault(guild_id, False)
         self._refresh_buttons()
 
     def _refresh_buttons(self):
@@ -1188,18 +1239,19 @@ class LyricsPaginatorView(discord.ui.View):
         await interaction.response.edit_message(embed=self.current_embed(), view=self)
 
 
-async def send_lyrics_panel(send_callable, requester, guild_id):
-    current = music_now.get(guild_id)
-    if current is None:
+async def send_lyrics_panel(send_callable, requester, guild_id=None, manual_query=None):
+    current = music_now.get(guild_id) if guild_id is not None else None
+    if current is None and not manual_query:
         return None
 
-    payload, source_name = fetch_lyrics_payload(current)
+    payload, source_name = fetch_lyrics_payload(current, manual_query=manual_query)
     if not payload:
-        return await send_callable("Lyrics not found on Genius or any backup source.")
+        return False
 
     lyrics_text, found_label, source_url = payload
     if source_name != "genius":
-        await send_callable(f"Genius missed it, trying **{source_name}** for: **{current.title}**")
+        search_label = manual_query or current.title
+        await send_callable(f"Genius missed it, trying **{source_name}** for: **{search_label}**")
 
     lyrics_text = format_lyrics_for_embed(lyrics_text)
     chunks = split_lyrics_chunks(lyrics_text, chunk_size=900)
@@ -1210,18 +1262,25 @@ async def send_lyrics_panel(send_callable, requester, guild_id):
 
 
 @bot.command()
-async def lyrics(ctx):
+async def lyrics(ctx, *, song_name=None):
     guild = ctx.guild
 
-    if guild.id not in music_now or music_now[guild.id] is None:
+    current = music_now.get(guild.id)
+    if current is None and not song_name:
         return await ctx.send("Nothing is playing right now.")
 
-    await ctx.send(f"Searching lyrics for: **{music_now[guild.id].title}**")
+    search_label = song_name or current.title
+    await ctx.send(f"Searching lyrics for: **{search_label}**")
 
     try:
-        message = await send_lyrics_panel(ctx.send, ctx.author, guild.id)
+        message = await send_lyrics_panel(ctx.send, ctx.author, guild.id if current else None, manual_query=song_name)
         if message is None:
             await ctx.send("Nothing is playing right now.")
+        elif message is False:
+            if song_name:
+                await ctx.send("Failed to find lyrics for that song.")
+            else:
+                await ctx.send("Failed to find lyrics please try to use `!lyrics <song name>`")
     except Exception as e:
         print(f"Lyrics error: {e}")
         await ctx.send("Error getting lyrics.")
