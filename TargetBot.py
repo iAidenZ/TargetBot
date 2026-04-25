@@ -26,6 +26,7 @@ music_starting = set()
 music_idle_tasks = {}
 music_text_channels = {}
 music_control_messages = {}
+music_autoplay = {}
 private_bal = {}
 payment_blocked = {}
 jail_troll_tasks = {}
@@ -1147,6 +1148,7 @@ class LyricsPaginatorView(discord.ui.View):
         self.source_url = source_url
         self.page_index = 0
         self.message = None
+        music_autoplay.setdefault(guild_id, False)
         self._refresh_buttons()
 
     def _refresh_buttons(self):
@@ -4457,7 +4459,8 @@ def build_music_embed(player, *, paused=False):
         embed.add_field(name="Source", value=f"[Open track]({player.webpage_url})", inline=False)
     if getattr(player, "thumbnail", None):
         embed.set_thumbnail(url=player.thumbnail)
-    embed.set_footer(text="Pause, stop, skip, or open lyrics below")
+    autoplay_state = music_autoplay.get(getattr(player, "guild_id", None), False) if hasattr(player, "guild_id") else False
+    embed.set_footer(text=f"Pause, stop, skip, or toggle autoplay ({'ON' if autoplay_state else 'OFF'})")
     return embed
 
 
@@ -4581,18 +4584,25 @@ class MusicControlView(discord.ui.View):
         else:
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
 
-    @discord.ui.button(label="Lyrics", style=discord.ButtonStyle.success)
-    async def lyrics_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Autoplay", style=discord.ButtonStyle.success)
+    async def autoplay_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         current = music_now.get(self.guild_id)
-        if current is None:
+        if current is None and not music_queue.get(self.guild_id):
             await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
             return
 
+        enabled = not music_autoplay.get(self.guild_id, False)
+        music_autoplay[self.guild_id] = enabled
+        button.label = f"Autoplay: {'ON' if enabled else 'OFF'}"
+
+        current = music_now.get(self.guild_id)
+        if self.message and current is not None:
+            await self.message.edit(embed=build_music_embed(current, paused=bool(interaction.guild.voice_client and interaction.guild.voice_client.is_paused())), view=self)
+
         await interaction.response.send_message(
-            f"Looking up lyrics for: **{current.title}**",
+            f"Autoplay is now {'enabled' if enabled else 'disabled'}.",
             ephemeral=True,
         )
-        await send_lyrics_panel(interaction.followup.send, interaction.user, self.guild_id)
 
 
 @bot.command()
@@ -4716,11 +4726,14 @@ async def play_next(ctx):
             await schedule_music_idle_disconnect(ctx.guild, ctx.channel)
         return
 
+    player.guild_id = guild_id
     music_now[guild_id] = player
 
     def after_play(error):
         if error:
             print(f"Player error: {error}")
+        if music_autoplay.get(guild_id):
+            music_queue[guild_id].insert(0, next_query)
         music_now[guild_id] = None
         music_starting.discard(guild_id)
         bot.loop.call_soon_threadsafe(lambda: bot.loop.create_task(play_next(ctx)))
