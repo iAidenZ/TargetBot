@@ -4565,6 +4565,7 @@ class MusicControlView(discord.ui.View):
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
 
+        music_autoplay[self.guild_id] = False
         music_queue[self.guild_id].clear()
         music_now[self.guild_id] = None
         music_starting.discard(self.guild_id)
@@ -4618,6 +4619,7 @@ async def leave(ctx):
         guild_id = ctx.guild.id
         ensure_music_state(guild_id)
         cancel_music_idle_disconnect(guild_id)
+        music_autoplay[guild_id] = False
         music_queue[guild_id].clear()
         music_now[guild_id] = None
         music_starting.discard(guild_id)
@@ -4635,6 +4637,7 @@ async def stop(ctx):
 
     guild_id = ctx.guild.id
     ensure_music_state(guild_id)
+    music_autoplay[guild_id] = False
     music_queue[guild_id].clear()
     music_now[guild_id] = None
     music_starting.discard(guild_id)
