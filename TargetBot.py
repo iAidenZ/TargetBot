@@ -693,16 +693,9 @@ class YTDLSource(discord.PCMVolumeTransformer):
 import requests
 import re
 
-GENIUS_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
+GENIUS_HEADERS = {"User-Agent": "TargetBot/1.0"}
 GENIUS_TAG_RE = re.compile(r"<[^>]+>")
+GENIUS_BLOCK_RE = re.compile(r'<div[^>]+data-lyrics-container="true"[^>]*>(.*?)</div>', re.DOTALL | re.IGNORECASE)
 
 
 def clean_lyrics_title(text):
@@ -801,81 +794,29 @@ def build_lyrics_queries(title, artist, track):
 
 
 def extract_genius_lyrics(page_html):
-    """
-    Parse Genius song page HTML and extract the full lyrics.
-    Uses BeautifulSoup so nested <div> tags inside lyrics containers
-    are handled correctly (the old regex stopped at the first </div>).
-    Falls back to a JSON state approach if the container divs are absent
-    (Genius occasionally changes its markup).
-    """
-    from bs4 import BeautifulSoup
+    matches = GENIUS_BLOCK_RE.findall(page_html)
+    if not matches:
+        return None
 
-    soup = BeautifulSoup(page_html, "lxml")
+    parts = []
+    for block in matches:
+        block = re.sub(r"<br\s*/?>", "\n", block, flags=re.IGNORECASE)
+        block = GENIUS_TAG_RE.sub("", block)
+        block = html_unescape(block)
+        cleaned = "\n".join(line.rstrip() for line in block.splitlines()).strip()
+        if cleaned:
+            parts.append(cleaned)
 
-    # ── Primary: data-lyrics-container divs ────────────────────────────
-    containers = soup.find_all("div", attrs={"data-lyrics-container": "true"})
-    if containers:
-        parts = []
-        for container in containers:
-            # Replace <br> tags with newlines before stripping all tags
-            for br in container.find_all("br"):
-                br.replace_with("\n")
-            # Section headers like [Verse 1] are in nested elements — keep them
-            text = container.get_text(separator="\n")
-            text = html_unescape(text)
-            cleaned = "\n".join(line.rstrip() for line in text.splitlines()).strip()
-            if cleaned:
-                parts.append(cleaned)
-        if parts:
-            return "\n\n".join(parts).strip()
-
-    # ── Fallback: embedded JSON state (Genius sometimes puts lyrics here) ─
-    import json
-    state_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*JSON\.parse\((.+?)\);\s*</script>', page_html, re.DOTALL)
-    if state_match:
-        try:
-            raw = json.loads(state_match.group(1))
-            state = json.loads(raw)
-            # Navigate to lyrics body
-            song_data = (
-                state.get("songPage", {})
-                     .get("lyricsData", {})
-                     .get("body", {})
-            )
-            children = song_data.get("children", [])
-            lines = []
-            def walk(node):
-                if isinstance(node, str):
-                    lines.append(node)
-                elif isinstance(node, dict):
-                    tag = node.get("tag", "")
-                    if tag == "br":
-                        lines.append("\n")
-                    for child in node.get("children", []):
-                        walk(child)
-            for child in children:
-                walk(child)
-            text = "".join(lines).strip()
-            if text:
-                return text
-        except Exception:
-            pass
-
-    return None
+    if not parts:
+        return None
+    return "\n\n".join(parts).strip()
 
 
 def fetch_genius_lyrics(title, artist, track):
-    """
-    Search Genius for the song and scrape the full lyrics.
-    Returns (lyrics_text, label, url) or None.
-    """
-    session = requests.Session()
-    session.headers.update(GENIUS_HEADERS)
-
     for search_query in build_lyrics_queries(title, artist, track):
         try:
             search_url = f"https://genius.com/api/search/multi?per_page=5&q={quote_plus(search_query)}"
-            response = session.get(search_url, timeout=12)
+            response = requests.get(search_url, timeout=10, headers=GENIUS_HEADERS)
             if not response.ok:
                 continue
             payload = response.json()
@@ -890,15 +831,15 @@ def fetch_genius_lyrics(title, artist, track):
                 if not song_url:
                     continue
                 try:
-                    page = session.get(song_url, timeout=12)
+                    page = requests.get(song_url, timeout=10, headers=GENIUS_HEADERS)
                 except Exception:
                     continue
                 if not page.ok:
                     continue
                 lyrics_text = extract_genius_lyrics(page.text)
                 if lyrics_text:
-                    artist_name = result.get("primary_artist", {}).get("name") or artist or "Unknown"
-                    song_title  = result.get("title") or track or title
+                    artist_name = result.get("primary_artist", {}).get("name") or artist or "Unknown artist"
+                    song_title = result.get("title") or track or title
                     return lyrics_text, f"{artist_name} - {song_title}", song_url
     return None
 
@@ -907,79 +848,12 @@ def fetch_lyrics_payload(current):
     title = current.title
     artist = getattr(current, "artist", None)
     track = getattr(current, "track", None)
-    source_url = getattr(current, "webpage_url", None)
 
     genius_result = fetch_genius_lyrics(title, artist, track)
     if genius_result:
         return genius_result
 
-    lyrics_text = None
-    found_label = title
-
-    for search_query in build_lyrics_queries(title, artist, track):
-        lrclib_url = f"https://lrclib.net/api/search?q={quote_plus(search_query)}"
-        response = requests.get(
-            lrclib_url,
-            timeout=10,
-            headers={"User-Agent": "TargetBot/1.0"}
-        )
-
-        if not response.ok:
-            continue
-
-        results = response.json()
-        if not isinstance(results, list) or not results:
-            continue
-
-        best = results[0]
-        lyrics_text = best.get("plainLyrics") or best.get("syncedLyrics")
-        if lyrics_text:
-            best_artist = best.get("artistName") or artist or "Unknown artist"
-            best_track = best.get("trackName") or track or title
-            found_label = f"{best_artist} - {best_track}"
-            break
-
-    if not lyrics_text:
-        cleaned_title = clean_lyrics_title(title)
-        title_parts = [part.strip() for part in cleaned_title.split(" - ") if part.strip()]
-        fallback_pairs = []
-
-        if artist and track:
-            fallback_pairs.append((clean_lyrics_title(artist), clean_lyrics_title(track)))
-        if len(title_parts) > 1:
-            fallback_pairs.append((title_parts[0], title_parts[-1]))
-        fallback_pairs.append((artist or "unknown", track or cleaned_title or title))
-
-        seen_pairs = set()
-        for fallback_artist, fallback_song in fallback_pairs:
-            pair = (fallback_artist.strip().lower(), fallback_song.strip().lower())
-            if pair in seen_pairs:
-                continue
-            seen_pairs.add(pair)
-
-            fallback_url = (
-                f"https://api.lyrics.ovh/v1/"
-                f"{quote_plus(fallback_artist)}/{quote_plus(fallback_song)}"
-            )
-            fallback_response = requests.get(
-                fallback_url,
-                timeout=10,
-                headers={"User-Agent": "TargetBot/1.0"}
-            )
-
-            if not fallback_response.ok:
-                continue
-
-            data = fallback_response.json()
-            if "lyrics" in data and data["lyrics"].strip():
-                lyrics_text = data["lyrics"]
-                found_label = f"{fallback_artist} - {fallback_song}"
-                break
-
-    if not lyrics_text:
-        return None
-
-    return lyrics_text, found_label, source_url
+    return None
 
 
 class LyricsPaginatorView(discord.ui.View):
@@ -4429,7 +4303,10 @@ class MusicControlView(discord.ui.View):
             await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
             return
 
-        await interaction.response.defer()
+        await interaction.response.send_message(
+            f"Looking up lyrics for: **{current.title}**",
+            ephemeral=True,
+        )
         await send_lyrics_panel(interaction.followup.send, interaction.user, self.guild_id)
 
 
