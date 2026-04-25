@@ -113,18 +113,10 @@ FISHING_CATCHES = {
     "shark":  {"emoji": "🦈",  "name": "Shark",       "reward": 100_000},
     "boot":   {"emoji": "👢",  "name": "Old Boot",    "reward": 100},
     # ── Legendary fish ──────────────────────────────────────────────────
-    "kraken": {
-        "emoji": "🦑",
-        "name":  "Kraken",
-        "base_reward":   1_000_000,
-        "base_chance":   0.001,          # 0.1 % at Lv 1 / Basic Rod
-    },
-    "bloop":  {
-        "emoji": "🌊",
-        "name":  "Bloop",
-        "base_reward":   3_000_000,
-        "base_chance":   0.0005,         # 0.05 % at Lv 1 / Basic Rod
-    },
+    "kraken":   {"emoji": "🦑", "name": "Kraken",    "base_reward": 1_000_000,  "base_chance": 0.001,  "scales_level": False},
+    "bloop":    {"emoji": "🌊", "name": "Bloop",     "base_reward": 3_000_000,  "base_chance": 0.0005, "scales_level": False},
+    "mobydick": {"emoji": "🐋", "name": "Moby Dick", "base_reward": 10_000_000, "base_chance": 0.0001, "scales_level": False},
+    "spongebob":{"emoji": "🧽", "name": "SpongeBob", "base_reward": 1_000_000,  "base_chance": 0.0029, "scales_level": False, "fixed_reward": True},
 }
 
 # ── Fishing hooks ────────────────────────────────────────────────────────────
@@ -369,37 +361,49 @@ def choose_fish_catch(rod_name: str, hook_name: str = "Basic Hook"):
     )[0]
 
 
-def _legendary_chance_multiplier(fishing_level_val: int, rare_bonus: int, legendary_hook_bonus: float = 0.0) -> float:
-    level_factor = 1.0 + min(fishing_level_val, 100) * 0.01
-    rod_factor   = 1.0 + min(rare_bonus, 30)         * 0.033
-    hook_factor  = 1.0 + legendary_hook_bonus
-    return min(level_factor * rod_factor * hook_factor, 3.0)
+def _legendary_multiplier(rare_bonus: int, legendary_hook_bonus: float = 0.0) -> float:
+    """Scales legendary chance purely on rod + hook. Level has NO effect."""
+    rod_factor  = 1.0 + min(rare_bonus, 30) * 0.033
+    hook_factor = 1.0 + legendary_hook_bonus
+    return min(rod_factor * hook_factor, 3.0)
 
 
-def check_legendary_catch(rod_name: str, fishing_level_val: int, hook_name: str = "Basic Hook") -> str | None:
+def check_legendary_catch(rod_name: str, hook_name: str = "Basic Hook") -> str | None:
+    """
+    Independent lottery for all legendary fish.
+    SpongeBob:  fixed chance, never scales.
+    Kraken/Bloop/Moby Dick: scale with rod rare_bonus + hook legendary_bonus.
+    Level has NO effect on any fish.
+    """
     rod_data  = FISHING_RODS[rod_name]
     hook_data = FISHING_HOOKS[hook_name]
-    multiplier = _legendary_chance_multiplier(
-        fishing_level_val, rod_data["rare_bonus"], hook_data["legendary_bonus"]
-    )
+    mult = _legendary_multiplier(rod_data["rare_bonus"], hook_data["legendary_bonus"])
 
-    kraken_chance = FISHING_CATCHES["kraken"]["base_chance"] * multiplier
-    bloop_chance  = FISHING_CATCHES["bloop"]["base_chance"]  * multiplier
+    chances = {
+        "bloop":     FISHING_CATCHES["bloop"]["base_chance"]     * mult,
+        "mobydick":  FISHING_CATCHES["mobydick"]["base_chance"]  * mult,
+        "kraken":    FISHING_CATCHES["kraken"]["base_chance"]    * mult,
+        "spongebob": FISHING_CATCHES["spongebob"]["base_chance"],   # always fixed
+    }
 
     roll = random.random()
-    if roll < bloop_chance:
-        return "bloop"
-    if roll < bloop_chance + kraken_chance:
-        return "kraken"
+    cumulative = 0.0
+    for key, chance in chances.items():
+        cumulative += chance
+        if roll < cumulative:
+            return key
     return None
 
 
-def legendary_reward(catch_key: str, rod_name: str, fishing_level_val: int) -> int:
-    """Scales legendary fish coin reward with rod multiplier and level."""
-    base          = FISHING_CATCHES[catch_key]["base_reward"]
-    rod_mult      = FISHING_RODS[rod_name]["reward_multiplier"]
-    level_bonus   = 1.0 + min(fishing_level_val, 100) * 0.005   # up to +50 %
-    return int(base * rod_mult * level_bonus)
+def legendary_reward(catch_key: str, rod_name: str) -> int:
+    """
+    SpongeBob always pays flat $1M.
+    All others scale with rod reward_multiplier only — level has NO effect.
+    """
+    catch = FISHING_CATCHES[catch_key]
+    if catch.get("fixed_reward"):
+        return catch["base_reward"]
+    return int(catch["base_reward"] * FISHING_RODS[rod_name]["reward_multiplier"])
 
 
 def parse_amount_input(raw_amount, *, balance=None, allow_all=False):
@@ -1945,81 +1949,101 @@ class FishShopView(discord.ui.View):
     def __init__(self, requester, user_id):
         super().__init__(timeout=120)
         self.requester = requester
-        self.user_id = user_id
+        self.user_id   = user_id
+        self._build()
 
+    def _build(self):
+        self.clear_items()
+        owned    = get_owned_rods(self.user_id)
+        equipped = get_equipped_rod(self.user_id)
+        row = 0
+        col = 0
         for rod_name, rod_data in FISHING_RODS.items():
-            style = discord.ButtonStyle.success if rod_data["price"] == 0 else discord.ButtonStyle.primary
-            button = discord.ui.Button(
-                label=rod_name,
-                style=style,
-                row=0 if len(self.children) < 5 else 1
-            )
-            button.callback = self.make_callback(rod_name)
-            self.add_item(button)
+            is_equipped = rod_name == equipped
+            is_owned    = rod_name in owned
+            if is_equipped:
+                label = f"✅ {rod_name}"
+                style = discord.ButtonStyle.success
+            elif is_owned:
+                label = f"Equip {rod_name}"
+                style = discord.ButtonStyle.secondary
+            else:
+                label = f"Buy {rod_name}"
+                style = discord.ButtonStyle.primary
+            btn = discord.ui.Button(label=label, style=style, row=row)
+            btn.callback = self._make_cb(rod_name)
+            self.add_item(btn)
+            col += 1
+            if col >= 3:
+                col = 0
+                row += 1
 
-    def make_callback(self, rod_name):
+    def _make_cb(self, rod_name):
         async def callback(interaction: discord.Interaction):
             if interaction.user.id != self.requester.id:
-                await interaction.response.send_message("This isn't your fish shop.", ephemeral=True)
+                await interaction.response.send_message("This isn\'t your shop.", ephemeral=True)
                 return
-
             owned = get_owned_rods(self.user_id)
             if rod_name in owned:
-                await interaction.response.send_message(f"You already own **{rod_name}**.", ephemeral=True)
+                fishing_equipped_rod[self.user_id] = rod_name
+                save_data()
+                self._build()
+                await interaction.response.edit_message(
+                    embed=_build_fishshop_embed(self.user_id), view=self
+                )
                 return
-
             price = FISHING_RODS[rod_name]["price"]
             if get_wallet(self.user_id) < price:
                 await interaction.response.send_message(
-                    f"You need **{format_coins(price)}** coins for **{rod_name}**.",
-                    ephemeral=True
+                    f"You need **{format_coins(price)}** coins for **{rod_name}**.", ephemeral=True
                 )
                 return
-
             wallet[self.user_id] -= price
             owned.append(rod_name)
+            fishing_equipped_rod[self.user_id] = rod_name
             save_data()
-            await interaction.response.send_message(
-                f"Bought **{rod_name}** for **{format_coins(price)}** coins. Use `!rod {rod_name}` to equip it.",
-                ephemeral=True
+            self._build()
+            await interaction.response.edit_message(
+                embed=_build_fishshop_embed(self.user_id), view=self
             )
-
         return callback
+
+
+def _build_fishshop_embed(user_id):
+    owned    = get_owned_rods(user_id)
+    equipped = get_equipped_rod(user_id)
+    embed = discord.Embed(
+        title="🎣 Fishing Rod Shop",
+        description=(
+            f"**General Level:** {get_general_level(user_id)}\n"
+            f"**Equipped:** {equipped}\n"
+            f"**Wallet:** {format_coins(get_wallet(user_id))} coins"
+        ),
+        color=discord.Color.blurple()
+    )
+    for rod_name, rod_data in FISHING_RODS.items():
+        if rod_name in owned:
+            status = "✅ Equipped" if rod_name == equipped else "✅ Owned"
+        else:
+            status = f"💰 {format_coins(rod_data['price'])}"
+        embed.add_field(
+            name=rod_name,
+            value=(
+                f"{status}\n"
+                f"Reward ×{rod_data['reward_multiplier']}\n"
+                f"Reaction: {rod_data['reaction_time']}s"
+            ),
+            inline=True
+        )
+    embed.set_footer(text="Click Buy to purchase, click Equip or the rod name to switch.")
+    return embed
 
 
 @bot.command()
 async def fishshop(ctx):
     user_id = ctx.author.id
-    owned = get_owned_rods(user_id)
-    equipped = get_equipped_rod(user_id)
-    level = get_fishing_level_value(user_id)
-    xp = get_fishing_xp(user_id)
+    await ctx.send(embed=_build_fishshop_embed(user_id), view=FishShopView(ctx.author, user_id))
 
-    embed = discord.Embed(
-        title="🎣 Fishing Rod Shop",
-        description=(
-            f"**Fishing Level:** {level}\n"
-            f"**Fishing XP:** {xp}\n"
-            f"**Equipped Rod:** {equipped}\n"
-            f"**Wallet:** {format_coins(get_wallet(user_id))} coins"
-        ),
-        color=discord.Color.blurple()
-    )
-
-    for rod_name, rod_data in FISHING_RODS.items():
-        status = "Owned" if rod_name in owned else f"Price: {format_coins(rod_data['price'])}"
-        embed.add_field(
-            name=rod_name,
-            value=(
-                f"{status}\n"
-                f"Reward x{rod_data['reward_multiplier']}\n"
-                f"Reaction: {rod_data['reaction_time']}s"
-            ),
-            inline=False
-        )
-
-    embed.set_footer(text="Use the buttons to buy rods, then equip one with !rod <name>.")
-    await ctx.send(embed=embed, view=FishShopView(ctx.author, user_id))
 
 
 @bot.command()
@@ -2107,18 +2131,17 @@ async def fish(ctx):
             guess = None
 
         if guess == position:
-            fishing_level_val = get_fishing_level_value(user_id)
             equipped_hook = get_equipped_hook(user_id)
             used_bait     = consume_bait(user_id)
             bait_data     = FISHING_BAITS[used_bait]
 
             # ── Legendary check (independent lottery) ───────────────────────
-            legendary_key = check_legendary_catch(equipped, fishing_level_val, equipped_hook)
+            legendary_key = check_legendary_catch(equipped, equipped_hook)
 
             if legendary_key:
                 catch_key = legendary_key
                 catch     = FISHING_CATCHES[catch_key]
-                reward    = legendary_reward(catch_key, equipped, fishing_level_val)
+                reward    = legendary_reward(catch_key, equipped)
             else:
                 catch_key = choose_fish_catch(equipped, equipped_hook)
                 catch     = FISHING_CATCHES[catch_key]
@@ -2142,7 +2165,7 @@ async def fish(ctx):
                 fishing_level[user_id] = new_level
                 leveled_up = new_level > old_level
                 # General XP
-                gen_xp_gain = random.randint(10, 25)
+                gen_xp_gain = random.randint(30, 60)
                 new_gen_level, gen_leveled = add_general_xp(user_id, gen_xp_gain)
             else:
                 xp_gained = 0
@@ -3330,7 +3353,7 @@ async def delivery(ctx):
 
         wallet.setdefault(user_id, 0)
         wallet[user_id] += final_reward
-        gen_xp_gain = random.randint(30, 80)
+        gen_xp_gain = random.randint(40, 80)
         new_gen_level, gen_leveled = add_general_xp(user_id, gen_xp_gain)
         save_data()
 
@@ -3391,11 +3414,25 @@ class HookShopView(discord.ui.View):
         super().__init__(timeout=120)
         self.requester = requester
         self.user_id   = user_id
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        owned    = get_owned_hooks(self.user_id)
+        equipped = get_equipped_hook(self.user_id)
         for hname, hdata in FISHING_HOOKS.items():
-            btn = discord.ui.Button(
-                label=f"{hdata['emoji']} {hname}",
-                style=discord.ButtonStyle.success if hdata["price"] == 0 else discord.ButtonStyle.primary,
-            )
+            is_equipped = hname == equipped
+            is_owned    = hname in owned
+            if is_equipped:
+                label = f"✅ {hdata['emoji']} {hname}"
+                style = discord.ButtonStyle.success
+            elif is_owned:
+                label = f"Equip {hdata['emoji']} {hname}"
+                style = discord.ButtonStyle.secondary
+            else:
+                label = f"Buy {hdata['emoji']} {hname}"
+                style = discord.ButtonStyle.primary
+            btn = discord.ui.Button(label=label, style=style)
             btn.callback = self._make_cb(hname)
             self.add_item(btn)
 
@@ -3405,189 +3442,312 @@ class HookShopView(discord.ui.View):
                 await interaction.response.send_message("Not your shop.", ephemeral=True)
                 return
             owned = get_owned_hooks(self.user_id)
+            hdata = FISHING_HOOKS[hname]
             if hname in owned:
                 hooks_equipped[self.user_id] = hname
                 save_data()
-                await interaction.response.send_message(
-                    f"Equipped **{FISHING_HOOKS[hname]['emoji']} {hname}**.", ephemeral=True
-                )
+                self._build()
+                await interaction.response.edit_message(embed=_build_hookshop_embed(self.user_id), view=self)
                 return
-            hdata     = FISHING_HOOKS[hname]
             level_req = hdata["level_req"]
             if get_general_level(self.user_id) < level_req:
                 await interaction.response.send_message(
                     f"You need **General Level {level_req}** to buy **{hname}**. "
-                    f"(You are Level {get_general_level(self.user_id)})",
-                    ephemeral=True,
-                )
+                    f"(You are Level {get_general_level(self.user_id)})", ephemeral=True)
                 return
             if get_wallet(self.user_id) < hdata["price"]:
                 await interaction.response.send_message(
-                    f"You need **{format_coins(hdata['price'])}** coins.", ephemeral=True
-                )
+                    f"You need **{format_coins(hdata['price'])}** coins.", ephemeral=True)
                 return
             wallet[self.user_id] -= hdata["price"]
             owned.append(hname)
             hooks_equipped[self.user_id] = hname
             save_data()
-            await interaction.response.send_message(
-                f"Bought & equipped **{hdata['emoji']} {hname}** for **{format_coins(hdata['price'])}** coins!",
-                ephemeral=True,
-            )
+            self._build()
+            await interaction.response.edit_message(embed=_build_hookshop_embed(self.user_id), view=self)
         return callback
 
 
-@bot.command(aliases=["hshop"])
-async def hookshop(ctx):
-    """Browse and buy fishing hooks."""
-    user_id  = ctx.author.id
+def _build_hookshop_embed(user_id):
     owned    = get_owned_hooks(user_id)
     equipped = get_equipped_hook(user_id)
-    gen_lvl  = get_general_level(user_id)
-
     embed = discord.Embed(
         title="🪝 Hook Shop",
         description=(
             f"**Equipped:** {FISHING_HOOKS[equipped]['emoji']} {equipped}\n"
-            f"**General Level:** {gen_lvl}  |  **Wallet:** {format_coins(get_wallet(user_id))} coins\n\n"
-            "Hooks improve **catch rate & fish rarity**."
+            f"**General Level:** {get_general_level(user_id)}  |  **Wallet:** {format_coins(get_wallet(user_id))} coins\n\n"
+            "Hooks boost **catch rate, rarity & legendary chances**."
         ),
         color=discord.Color.teal(),
     )
     for hname, hdata in FISHING_HOOKS.items():
-        status   = "✅ Owned" if hname in owned else f"💰 {format_coins(hdata['price'])}"
-        lvl_line = f"🔒 Level {hdata['level_req']}\n" if hdata["level_req"] > 0 else ""
+        if hname in owned:
+            status = "✅ Equipped" if hname == equipped else "✅ Owned"
+        else:
+            status = f"💰 {format_coins(hdata['price'])}"
+        lvl_line = f"🔒 Lvl {hdata['level_req']}  " if hdata["level_req"] > 0 else ""
         embed.add_field(
             name=f"{hdata['emoji']} {hname}",
             value=(
-                f"{status}\n{lvl_line}"
-                f"+{hdata['rare_bonus']} rare  |  +{hdata['shark_bonus']} shark\n"
+                f"{status}  {lvl_line}\n"
+                f"+{hdata['rare_bonus']} rare  +{hdata['shark_bonus']} shark\n"
                 f"+{int(hdata['legendary_bonus']*100)}% legendary"
             ),
             inline=True,
         )
-    await ctx.send(embed=embed, view=HookShopView(ctx.author, user_id))
+    embed.set_footer(text="Click Buy to purchase and auto-equip.")
+    return embed
+
+
+@bot.command(aliases=["hshop"])
+async def hookshop(ctx):
+    user_id = ctx.author.id
+    await ctx.send(embed=_build_hookshop_embed(user_id), view=HookShopView(ctx.author, user_id))
 
 
 @bot.command()
 async def hook(ctx, *, hname: str = None):
-    """Equip a hook you own."""
     user_id = ctx.author.id
     if not hname:
         eq = get_equipped_hook(user_id)
         return await ctx.send(f"Equipped hook: **{FISHING_HOOKS[eq]['emoji']} {eq}**")
     match = next((n for n in FISHING_HOOKS if n.lower() == hname.strip().lower()), None)
     if not match:
-        return await ctx.send("Unknown hook. Use `!hookshop` to see options.")
+        return await ctx.send("Unknown hook. Use `!hookshop`.")
     if match not in get_owned_hooks(user_id):
-        return await ctx.send(f"You don't own **{match}**. Buy it from `!hookshop`.")
+        return await ctx.send(f"You don\'t own **{match}**. Buy it from `!hookshop`.")
     hooks_equipped[user_id] = match
     save_data()
     await ctx.send(f"Equipped **{FISHING_HOOKS[match]['emoji']} {match}**.")
 
 
-@bot.command(aliases=["bshop"])
-async def baitshop(ctx):
-    """Browse and buy fishing bait."""
-    user_id  = ctx.author.id
+# ── Bait shop ────────────────────────────────────────────────────────────────
+BAIT_BUY_AMOUNTS = [1, 5, 10, 50]
+
+
+class BaitShopView(discord.ui.View):
+    """
+    Shows one row of bait-select buttons and one row of quantity buttons.
+    The selected bait + quantity is stored on the view, confirmed with a Buy button.
+    """
+    def __init__(self, requester, user_id: int):
+        super().__init__(timeout=120)
+        self.requester    = requester
+        self.user_id      = user_id
+        self.selected_bait = None
+        self.selected_qty  = 1
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+
+        # Row 0: bait select
+        for bname, bdata in FISHING_BAITS.items():
+            is_selected = bname == self.selected_bait
+            is_worm     = bname == "Worm"
+            if is_worm:
+                btn = discord.ui.Button(
+                    label=f"{bdata['emoji']} Equip Worm",
+                    style=discord.ButtonStyle.secondary,
+                    row=0,
+                )
+                btn.callback = self._equip_worm_cb()
+            else:
+                btn = discord.ui.Button(
+                    label=f"{bdata['emoji']} {bname}",
+                    style=discord.ButtonStyle.success if is_selected else discord.ButtonStyle.primary,
+                    row=0,
+                )
+                btn.callback = self._select_bait_cb(bname)
+            self.add_item(btn)
+
+        # Row 1: qty buttons (only shown when a non-worm bait is selected)
+        if self.selected_bait and self.selected_bait != "Worm":
+            for qty in BAIT_BUY_AMOUNTS:
+                btn = discord.ui.Button(
+                    label=f"x{qty}",
+                    style=discord.ButtonStyle.success if qty == self.selected_qty else discord.ButtonStyle.secondary,
+                    row=1,
+                )
+                btn.callback = self._select_qty_cb(qty)
+                self.add_item(btn)
+
+            # Row 2: confirm buy + equip buttons
+            buy_btn = discord.ui.Button(label=f"🛒 Buy x{self.selected_qty}", style=discord.ButtonStyle.danger, row=2)
+            buy_btn.callback = self._buy_cb()
+            self.add_item(buy_btn)
+
+            equip_btn = discord.ui.Button(label="✅ Equip this bait", style=discord.ButtonStyle.success, row=2)
+            equip_btn.callback = self._equip_cb()
+            self.add_item(equip_btn)
+
+    def _select_bait_cb(self, bname):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.requester.id:
+                await interaction.response.send_message("Not your shop.", ephemeral=True)
+                return
+            self.selected_bait = bname
+            self.selected_qty  = 1
+            self._build()
+            await interaction.response.edit_message(embed=_build_baitshop_embed(self.user_id, self.selected_bait), view=self)
+        return callback
+
+    def _equip_worm_cb(self):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.requester.id:
+                await interaction.response.send_message("Not your shop.", ephemeral=True)
+                return
+            bait_equipped[self.user_id] = "Worm"
+            save_data()
+            self._build()
+            await interaction.response.edit_message(embed=_build_baitshop_embed(self.user_id, self.selected_bait), view=self)
+        return callback
+
+    def _select_qty_cb(self, qty):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.requester.id:
+                await interaction.response.send_message("Not your shop.", ephemeral=True)
+                return
+            self.selected_qty = qty
+            self._build()
+            await interaction.response.edit_message(embed=_build_baitshop_embed(self.user_id, self.selected_bait), view=self)
+        return callback
+
+    def _buy_cb(self):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.requester.id:
+                await interaction.response.send_message("Not your shop.", ephemeral=True)
+                return
+            bname = self.selected_bait
+            qty   = self.selected_qty
+            bdata = FISHING_BAITS[bname]
+
+            level_req = bdata["level_req"]
+            if get_general_level(self.user_id) < level_req:
+                await interaction.response.send_message(
+                    f"You need **General Level {level_req}** for **{bname}**. "
+                    f"(You are Level {get_general_level(self.user_id)})", ephemeral=True)
+                return
+            total = bdata["price"] * qty
+            if get_wallet(self.user_id) < total:
+                await interaction.response.send_message(
+                    f"You need **{format_coins(total)}** coins for {qty}× {bname}. "
+                    f"(You have {format_coins(get_wallet(self.user_id))})", ephemeral=True)
+                return
+            wallet[self.user_id] -= total
+            inv = get_bait_inventory(self.user_id)
+            inv[bname] = inv.get(bname, 0) + qty
+            save_data()
+            self._build()
+            await interaction.response.edit_message(embed=_build_baitshop_embed(self.user_id, self.selected_bait), view=self)
+        return callback
+
+    def _equip_cb(self):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.requester.id:
+                await interaction.response.send_message("Not your shop.", ephemeral=True)
+                return
+            bname = self.selected_bait
+            inv   = get_bait_inventory(self.user_id)
+            if inv.get(bname, 0) <= 0:
+                await interaction.response.send_message(
+                    f"You don\'t have any **{bname}** yet. Buy some first!", ephemeral=True)
+                return
+            bait_equipped[self.user_id] = bname
+            save_data()
+            self._build()
+            await interaction.response.edit_message(embed=_build_baitshop_embed(self.user_id, self.selected_bait), view=self)
+        return callback
+
+
+def _build_baitshop_embed(user_id, selected_bait=None):
     inv      = get_bait_inventory(user_id)
     equipped = get_equipped_bait(user_id)
-    gen_lvl  = get_general_level(user_id)
-
     embed = discord.Embed(
         title="🎣 Bait Shop",
         description=(
             f"**Equipped:** {FISHING_BAITS[equipped]['emoji']} {equipped}\n"
-            f"**General Level:** {gen_lvl}  |  **Wallet:** {format_coins(get_wallet(user_id))} coins\n\n"
-            "Bait boosts **coin rewards** per catch. Consumable bait is used once per cast."
+            f"**General Level:** {get_general_level(user_id)}  |  **Wallet:** {format_coins(get_wallet(user_id))} coins\n\n"
+            "Bait boosts **coin rewards** per catch. Consumed once per cast."
         ),
         color=discord.Color.blue(),
     )
     for bname, bdata in FISHING_BAITS.items():
-        qty = "∞" if inv.get(bname, 0) == -1 else str(inv.get(bname, 0))
-        lvl_line = f"🔒 Level {bdata['level_req']}\n" if bdata["level_req"] > 0 else ""
+        qty      = "∞" if inv.get(bname, 0) == -1 else str(inv.get(bname, 0))
+        lvl_line = f"🔒 Lvl {bdata['level_req']}  " if bdata["level_req"] > 0 else ""
+        selected_marker = " 👈" if bname == selected_bait else ""
         embed.add_field(
-            name=f"{bdata['emoji']} {bname}",
+            name=f"{bdata['emoji']} {bname}{selected_marker}",
             value=(
-                f"💰 {format_coins(bdata['price'])} each\n{lvl_line}"
+                f"💰 {format_coins(bdata['price'])} each  {lvl_line}\n"
                 f"+{int(bdata['reward_bonus']*100)}% coins\n"
                 f"Stock: **{qty}**"
             ),
             inline=True,
         )
-    embed.set_footer(text="Use !buybait <name> <amount> to purchase.")
-    await ctx.send(embed=embed)
+    if selected_bait and selected_bait != "Worm":
+        bdata = FISHING_BAITS[selected_bait]
+        embed.set_footer(text=f"Selected: {selected_bait} — pick a quantity then hit Buy.")
+    else:
+        embed.set_footer(text="Click a bait to select it, then choose a quantity.")
+    return embed
+
+
+@bot.command(aliases=["bshop"])
+async def baitshop(ctx):
+    user_id = ctx.author.id
+    await ctx.send(embed=_build_baitshop_embed(user_id), view=BaitShopView(ctx.author, user_id))
 
 
 @bot.command()
 async def buybait(ctx, *, args: str = None):
-    """Buy bait — usage: !buybait <name> <amount>"""
+    """Buy bait via command — usage: !buybait <name> <amount>"""
     user_id = ctx.author.id
     if not args:
         return await ctx.send("Usage: `!buybait <bait name> <amount>`")
-
     parts = args.rsplit(" ", 1)
     if len(parts) < 2 or not parts[-1].isdigit():
         return await ctx.send("Usage: `!buybait <bait name> <amount>`  e.g. `!buybait Shrimp 10`")
-
     bname_raw, qty_str = parts[0].strip(), parts[1]
     qty = int(qty_str)
     if qty <= 0:
         return await ctx.send("Amount must be at least 1.")
-
     match = next((n for n in FISHING_BAITS if n.lower() == bname_raw.lower()), None)
     if not match:
-        return await ctx.send("Unknown bait. Use `!baitshop` to see options.")
+        return await ctx.send("Unknown bait. Use `!baitshop`.")
     if match == "Worm":
-        return await ctx.send("Worm is free and unlimited — no need to buy it!")
-
-    bdata     = FISHING_BAITS[match]
-    level_req = bdata["level_req"]
-    if get_general_level(user_id) < level_req:
-        return await ctx.send(
-            f"You need **General Level {level_req}** to buy **{match}**. "
-            f"(You are Level {get_general_level(user_id)})"
-        )
-
-    total_cost = bdata["price"] * qty
-    if get_wallet(user_id) < total_cost:
-        return await ctx.send(
-            f"You need **{format_coins(total_cost)}** coins for {qty}x {match}. "
-            f"(You have {format_coins(get_wallet(user_id))})"
-        )
-
-    wallet[user_id] -= total_cost
+        return await ctx.send("Worm is free and unlimited!")
+    bdata = FISHING_BAITS[match]
+    if get_general_level(user_id) < bdata["level_req"]:
+        return await ctx.send(f"You need **General Level {bdata['level_req']}** for **{match}**.")
+    total = bdata["price"] * qty
+    if get_wallet(user_id) < total:
+        return await ctx.send(f"You need **{format_coins(total)}** coins. (Have {format_coins(get_wallet(user_id))})")
+    wallet[user_id] -= total
     inv = get_bait_inventory(user_id)
     inv[match] = inv.get(match, 0) + qty
     save_data()
-    await ctx.send(
-        f"Bought **{qty}x {bdata['emoji']} {match}** for **{format_coins(total_cost)}** coins!\n"
-        f"Stock: **{inv[match]}**  |  Wallet: {format_coins(get_wallet(user_id))}"
-    )
+    await ctx.send(f"Bought **{qty}× {bdata['emoji']} {match}** for **{format_coins(total)}** coins! Stock: **{inv[match]}**")
 
 
 @bot.command()
 async def bait(ctx, *, bname: str = None):
-    """Equip bait — usage: !bait <name>"""
     user_id = ctx.author.id
     if not bname:
         eq  = get_equipped_bait(user_id)
         inv = get_bait_inventory(user_id)
         qty = "∞" if inv.get(eq, 0) == -1 else str(inv.get(eq, 0))
-        return await ctx.send(
-            f"Equipped bait: **{FISHING_BAITS[eq]['emoji']} {eq}** (Stock: {qty})"
-        )
+        return await ctx.send(f"Equipped bait: **{FISHING_BAITS[eq]['emoji']} {eq}** (Stock: {qty})")
     match = next((n for n in FISHING_BAITS if n.lower() == bname.strip().lower()), None)
     if not match:
-        return await ctx.send("Unknown bait. Use `!baitshop` to see options.")
+        return await ctx.send("Unknown bait. Use `!baitshop`.")
     inv = get_bait_inventory(user_id)
     if match != "Worm" and inv.get(match, 0) <= 0:
-        return await ctx.send(
-            f"You don't have any **{match}**. Buy some with `!buybait {match} <amount>`."
-        )
+        return await ctx.send(f"You don\'t have any **{match}**. Buy some with `!baitshop`.")
     bait_equipped[user_id] = match
     save_data()
     await ctx.send(f"Equipped **{FISHING_BAITS[match]['emoji']} {match}**.")
+
 
 
 # ======================== GENERAL LEVEL =======================================
