@@ -2154,23 +2154,11 @@ async def fish(ctx):
             wallet.setdefault(user_id, 0)
             wallet[user_id] += reward
 
-            leveled_up = False
-            new_level = get_fishing_level_value(user_id)
-
-            if catch_key not in ("boot",):
-                xp_gained = random.randint(20, 50)
-                old_level = get_fishing_level_value(user_id)
-                fishing_xp[user_id] = get_fishing_xp(user_id) + xp_gained
-                new_level = fishing_xp[user_id] // 100
-                fishing_level[user_id] = new_level
-                leveled_up = new_level > old_level
-                # General XP
+            if catch_key != "boot":
                 gen_xp_gain = random.randint(30, 60)
-                new_gen_level, gen_leveled = add_general_xp(user_id, gen_xp_gain)
             else:
-                xp_gained = 0
                 gen_xp_gain = 5
-                new_gen_level, gen_leveled = add_general_xp(user_id, gen_xp_gain)
+            new_gen_level, gen_leveled = add_general_xp(user_id, gen_xp_gain)
 
             save_data()
 
@@ -2186,7 +2174,7 @@ async def fish(ctx):
                         f"{grid}\n\n"
                         f"⚠️ You pulled up a **{catch['name']}** from the depths!\n\n"
                         f"**+{format_coins(reward)} coins**\n"
-                        f"**+{xp_gained} Fishing XP** | **+{gen_xp_gain} General XP**\n"
+                        f"**+{gen_xp_gain} General XP**\n"
                         f"{bait_line}"
                     ),
                     color=discord.Color.gold()
@@ -2197,19 +2185,16 @@ async def fish(ctx):
                     description=(
                         f"{grid}\n\n"
                         f"**+{format_coins(reward)} coins**\n"
-                        f"**+{xp_gained} Fishing XP** | **+{gen_xp_gain} General XP**\n"
+                        f"**+{gen_xp_gain} General XP**\n"
                         f"{bait_line}"
                     ),
                     color=discord.Color.green() if catch_key != "boot" else discord.Color.orange()
                 )
-            result_embed.add_field(name="Fishing Level", value=str(new_level), inline=True)
-            result_embed.add_field(name="General Level", value=str(new_gen_level), inline=True)
-            result_embed.add_field(name="Rod", value=equipped, inline=True)
-            result_embed.add_field(name="Hook", value=f"{FISHING_HOOKS[equipped_hook]['emoji']} {equipped_hook}", inline=True)
-            if leveled_up:
-                result_embed.add_field(name="🎣 Fishing Level Up!", value=f"Level **{new_level}**!", inline=False)
+            result_embed.add_field(name="⬆️ General Level", value=str(new_gen_level), inline=True)
+            result_embed.add_field(name="🎣 Rod", value=equipped, inline=True)
+            result_embed.add_field(name="🪝 Hook", value=f"{FISHING_HOOKS[equipped_hook]['emoji']} {equipped_hook}", inline=True)
             if gen_leveled:
-                result_embed.add_field(name="⬆️ General Level Up!", value=f"Level **{new_gen_level}**!", inline=False)
+                result_embed.add_field(name="⬆️ General Level Up!", value=f"You reached **Level {new_gen_level}**!", inline=False)
         else:
             boot = FISHING_CATCHES["boot"]
             reward = int(boot["reward"] * rod_data["reward_multiplier"])
@@ -2253,66 +2238,262 @@ async def wish(ctx, *args):
 
     if not args:
         await ctx.send(
-            "Usage: `!wish @user <amount>` or `!wish <amount>` or "
-            "`!wish @user reset` or `!wish @user remove <amount>`"
+            "**!wish usage:**\n"
+            "`!wish [@user] <amount>` — give coins\n"
+            "`!wish [@user] remove <amount>` — remove coins\n"
+            "`!wish [@user] reset` — reset claim timers\n"
+            "`!wish [@user] rod <rod name>` — give rod\n"
+            "`!wish [@user] remove rod <rod name>` — remove rod\n"
+            "`!wish [@user] hook <hook name>` — give hook\n"
+            "`!wish [@user] remove hook <hook name>` — remove hook\n"
+            "`!wish [@user] bait <bait name> [amount]` — give bait\n"
+            "`!wish [@user] remove bait <bait name> [amount]` — remove bait\n"
+            "`!wish [@user] level <amount>` — add general levels\n"
+            "`!wish [@user] remove level <amount>` — remove general levels\n"
+            "_Omit @user to target yourself._"
         )
         return
 
+    # ── Resolve optional target ───────────────────────────────────────────────
     target = ctx.author
-    parts = list(args)
+    parts  = list(args)
     converter = commands.MemberConverter()
-
     try:
         possible_target = await converter.convert(ctx, parts[0])
         target = possible_target
-        parts = parts[1:]
+        parts  = parts[1:]
     except commands.BadArgument:
         pass
 
     if not parts:
-        await ctx.send("Give an amount, or use `reset`, or `remove <amount>`.")
+        await ctx.send("Specify what to wish for. Use `!wish` to see usage.")
         return
 
-    action = str(parts[0]).strip().lower()
+    uid    = target.id
+    action = parts[0].strip().lower()   # first real arg
 
-    if action == "reset":
-        claims = get_claims(target.id)
-        claims["daily"] = 0
-        claims["weekly"] = 0
-        claims["monthly"] = 0
-        save_data()
-        await ctx.send(f"Reset all claim timers for {target.mention}.")
-        return
+    # ── Helper ────────────────────────────────────────────────────────────────
+    def name_of(target_member):
+        return "You" if target_member.id == ctx.author.id else target_member.mention
 
-    if action in {"remove", "take", "delete", "del"}:
+    # ══════════════════════════════════════════════════════════════════════════
+    # REMOVE branch
+    # ══════════════════════════════════════════════════════════════════════════
+    if action in {"remove", "take", "del", "delete"}:
         if len(parts) < 2:
-            await ctx.send("Usage: `!wish @user remove <amount>`")
+            await ctx.send("Remove what? Specify `coins`, `rod`, `hook`, `bait`, or `level`.")
             return
 
-        wish_amount = parse_amount_input(parts[1], balance=get_wallet(target.id), allow_all=True)
-        if wish_amount is None:
-            await ctx.send("Invalid amount.")
+        sub = parts[1].strip().lower()
+
+        # ── remove coins ─────────────────────────────────────────────────────
+        if sub not in {"rod", "hook", "bait", "level"}:
+            # treat parts[1] as a coin amount
+            amount = parse_amount_input(parts[1], balance=get_wallet(uid), allow_all=True)
+            if amount is None:
+                await ctx.send("Invalid coin amount.")
+                return
+            wallet.setdefault(uid, 0)
+            wallet[uid] = max(0, wallet[uid] - amount)
+            save_data()
+            await ctx.send(f"Removed **{format_coins(amount)}** coins from {name_of(target)}.")
             return
 
-        wallet.setdefault(target.id, 0)
-        wallet[target.id] = max(0, wallet[target.id] - wish_amount)
+        # ── remove rod ───────────────────────────────────────────────────────
+        if sub == "rod":
+            rod_input = " ".join(parts[2:]).strip()
+            if not rod_input:
+                await ctx.send("Specify a rod name. E.g. `!wish remove rod Pro Rod`")
+                return
+            matched = find_rod_name(rod_input)
+            if not matched:
+                await ctx.send(f"Unknown rod **{rod_input}**.")
+                return
+            if matched == "Basic Rod":
+                await ctx.send("Can't remove the Basic Rod — it's the default.")
+                return
+            owned = get_owned_rods(uid)
+            if matched not in owned:
+                await ctx.send(f"{name_of(target)} doesn't own **{matched}**.")
+                return
+            owned.remove(matched)
+            if get_equipped_rod(uid) == matched:
+                fishing_equipped_rod[uid] = "Basic Rod"
+            save_data()
+            await ctx.send(f"Removed rod **{matched}** from {name_of(target)}.")
+            return
+
+        # ── remove hook ──────────────────────────────────────────────────────
+        if sub == "hook":
+            hook_input = " ".join(parts[2:]).strip()
+            if not hook_input:
+                await ctx.send("Specify a hook name. E.g. `!wish remove hook Golden Hook`")
+                return
+            matched = next((n for n in FISHING_HOOKS if n.lower() == hook_input.lower()), None)
+            if not matched:
+                await ctx.send(f"Unknown hook **{hook_input}**.")
+                return
+            if matched == "Basic Hook":
+                await ctx.send("Can't remove the Basic Hook — it's the default.")
+                return
+            owned = get_owned_hooks(uid)
+            if matched not in owned:
+                await ctx.send(f"{name_of(target)} doesn't own **{matched}**.")
+                return
+            owned.remove(matched)
+            if get_equipped_hook(uid) == matched:
+                hooks_equipped[uid] = "Basic Hook"
+            save_data()
+            await ctx.send(f"Removed hook **{matched}** from {name_of(target)}.")
+            return
+
+        # ── remove bait ──────────────────────────────────────────────────────
+        if sub == "bait":
+            # parts: [remove, bait, ...name..., optional_qty]
+            bait_parts = parts[2:]
+            qty = 1
+            if bait_parts and bait_parts[-1].isdigit():
+                qty        = int(bait_parts[-1])
+                bait_parts = bait_parts[:-1]
+            bait_input = " ".join(bait_parts).strip()
+            if not bait_input:
+                await ctx.send("Specify a bait name. E.g. `!wish remove bait Shrimp 10`")
+                return
+            matched = next((n for n in FISHING_BAITS if n.lower() == bait_input.lower()), None)
+            if not matched:
+                await ctx.send(f"Unknown bait **{bait_input}**.")
+                return
+            if matched == "Worm":
+                await ctx.send("Worm is unlimited — can't remove it.")
+                return
+            inv = get_bait_inventory(uid)
+            current = inv.get(matched, 0)
+            if current <= 0:
+                await ctx.send(f"{name_of(target)} has no **{matched}**.")
+                return
+            inv[matched] = max(0, current - qty)
+            if inv[matched] == 0 and get_equipped_bait(uid) == matched:
+                bait_equipped[uid] = "Worm"
+            save_data()
+            await ctx.send(f"Removed **{qty}× {matched}** from {name_of(target)}. (Remaining: {inv[matched]})")
+            return
+
+        # ── remove level ─────────────────────────────────────────────────────
+        if sub == "level":
+            if len(parts) < 3 or not parts[2].isdigit():
+                await ctx.send("Specify how many levels to remove. E.g. `!wish remove level 10`")
+                return
+            lvl_amount = int(parts[2])
+            xp_to_remove = lvl_amount * GENERAL_XP_PER_LEVEL
+            current_xp   = get_general_xp(uid)
+            new_xp       = max(0, current_xp - xp_to_remove)
+            player_general_xp[uid]    = new_xp
+            player_general_level[uid] = new_xp // GENERAL_XP_PER_LEVEL
+            save_data()
+            await ctx.send(
+                f"Removed **{lvl_amount} level(s)** from {name_of(target)}. "
+                f"Now Level **{player_general_level[uid]}**."
+            )
+            return
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # GIVE / SET branch
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # ── reset claims ─────────────────────────────────────────────────────────
+    if action == "reset":
+        claims = get_claims(uid)
+        claims["daily"] = claims["weekly"] = claims["monthly"] = 0
         save_data()
-        await ctx.send(f"Removed **{wish_amount:,}** coins from {target.mention}.")
+        await ctx.send(f"Reset all claim timers for {name_of(target)}.")
         return
 
-    wish_amount = parse_amount_input(parts[0])
-    if wish_amount is None:
-        await ctx.send("Invalid amount.")
+    # ── give rod ─────────────────────────────────────────────────────────────
+    if action == "rod":
+        rod_input = " ".join(parts[1:]).strip()
+        if not rod_input:
+            await ctx.send("Specify a rod name. E.g. `!wish rod Pro Rod`")
+            return
+        matched = find_rod_name(rod_input)
+        if not matched:
+            await ctx.send(f"Unknown rod **{rod_input}**. Options: {', '.join(FISHING_RODS)}")
+            return
+        owned = get_owned_rods(uid)
+        if matched not in owned:
+            owned.append(matched)
+        fishing_equipped_rod[uid] = matched
+        save_data()
+        await ctx.send(f"Gave rod **{matched}** to {name_of(target)} and equipped it.")
         return
 
-    wallet.setdefault(target.id, 0)
-    wallet[target.id] += wish_amount
+    # ── give hook ─────────────────────────────────────────────────────────────
+    if action == "hook":
+        hook_input = " ".join(parts[1:]).strip()
+        if not hook_input:
+            await ctx.send("Specify a hook name. E.g. `!wish hook Diamond Hook`")
+            return
+        matched = next((n for n in FISHING_HOOKS if n.lower() == hook_input.lower()), None)
+        if not matched:
+            await ctx.send(f"Unknown hook **{hook_input}**. Options: {', '.join(FISHING_HOOKS)}")
+            return
+        owned = get_owned_hooks(uid)
+        if matched not in owned:
+            owned.append(matched)
+        hooks_equipped[uid] = matched
+        save_data()
+        await ctx.send(f"Gave hook **{FISHING_HOOKS[matched]['emoji']} {matched}** to {name_of(target)} and equipped it.")
+        return
+
+    # ── give bait ─────────────────────────────────────────────────────────────
+    if action == "bait":
+        bait_parts = parts[1:]
+        qty = 10   # default
+        if bait_parts and bait_parts[-1].isdigit():
+            qty        = int(bait_parts[-1])
+            bait_parts = bait_parts[:-1]
+        bait_input = " ".join(bait_parts).strip()
+        if not bait_input:
+            await ctx.send("Specify a bait name. E.g. `!wish bait Magic Bait 50`")
+            return
+        matched = next((n for n in FISHING_BAITS if n.lower() == bait_input.lower()), None)
+        if not matched:
+            await ctx.send(f"Unknown bait **{bait_input}**. Options: {', '.join(FISHING_BAITS)}")
+            return
+        inv = get_bait_inventory(uid)
+        if matched == "Worm":
+            await ctx.send("Worm is already unlimited for everyone.")
+            return
+        inv[matched] = inv.get(matched, 0) + qty
+        bait_equipped[uid] = matched
+        save_data()
+        await ctx.send(f"Gave **{qty}× {FISHING_BAITS[matched]['emoji']} {matched}** to {name_of(target)}. (Total: {inv[matched]})")
+        return
+
+    # ── give level ────────────────────────────────────────────────────────────
+    if action == "level":
+        if len(parts) < 2 or not parts[1].isdigit():
+            await ctx.send("Specify how many levels to give. E.g. `!wish level 10`")
+            return
+        lvl_amount = int(parts[1])
+        xp_to_add  = lvl_amount * GENERAL_XP_PER_LEVEL
+        player_general_xp[uid]    = get_general_xp(uid) + xp_to_add
+        player_general_level[uid] = player_general_xp[uid] // GENERAL_XP_PER_LEVEL
+        save_data()
+        await ctx.send(
+            f"Gave **{lvl_amount} level(s)** to {name_of(target)}. "
+            f"Now Level **{player_general_level[uid]}**."
+        )
+        return
+
+    # ── give coins (default) ──────────────────────────────────────────────────
+    amount = parse_amount_input(parts[0])
+    if amount is None:
+        await ctx.send("Unknown wish action. Use `!wish` to see all options.")
+        return
+    wallet.setdefault(uid, 0)
+    wallet[uid] += amount
     save_data()
-
-    if target.id == ctx.author.id:
-        await ctx.send(f"Granted yourself **{wish_amount:,}** coins.")
-    else:
-        await ctx.send(f"Granted **{wish_amount:,}** coins to {target.mention}.")
+    await ctx.send(f"Granted **{format_coins(amount)}** coins to {name_of(target)}.")
 
 
 # ===== TRANSFER =====
@@ -3757,16 +3938,14 @@ async def level(ctx, member: discord.Member = None):
     """Check your (or someone else's) general level."""
     target  = member or ctx.author
     user_id = target.id
-    gen_lvl  = get_general_level(user_id)
-    gen_xp   = get_general_xp(user_id)
-    xp_next  = (gen_lvl + 1) * GENERAL_XP_PER_LEVEL
-    fish_lvl = get_fishing_level_value(user_id)
+    gen_lvl = get_general_level(user_id)
+    gen_xp  = get_general_xp(user_id)
 
     bar_filled = min(20, int((gen_xp % GENERAL_XP_PER_LEVEL) / GENERAL_XP_PER_LEVEL * 20))
     bar = "█" * bar_filled + "░" * (20 - bar_filled)
 
     embed = discord.Embed(
-        title=f"📊 {target.display_name}'s Levels",
+        title=f"📊 {target.display_name}'s Level",
         color=discord.Color.purple(),
     )
     embed.add_field(
@@ -3778,8 +3957,8 @@ async def level(ctx, member: discord.Member = None):
         ),
         inline=False,
     )
-    embed.add_field(name="🎣 Fishing Level", value=str(fish_lvl), inline=True)
-    embed.add_field(name="🪝 Hook",  value=f"{FISHING_HOOKS[get_equipped_hook(user_id)]['emoji']} {get_equipped_hook(user_id)}", inline=True)
+    embed.add_field(name="🎣 Rod",     value=get_equipped_rod(user_id), inline=True)
+    embed.add_field(name="🪝 Hook",    value=f"{FISHING_HOOKS[get_equipped_hook(user_id)]['emoji']} {get_equipped_hook(user_id)}", inline=True)
     embed.add_field(name="🛵 Vehicle", value=f"{DELIVERY_VEHICLES[get_equipped_vehicle(user_id)]['emoji']} {get_equipped_vehicle(user_id)}", inline=True)
     await ctx.send(embed=embed)
 
