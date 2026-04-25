@@ -14,6 +14,7 @@ from functools import partial
 import yt_dlp
 from decimal import Decimal, InvalidOperation
 from html import unescape as html_unescape
+from difflib import SequenceMatcher
 
 DATA_FILE = "/app/data/data.json"
 
@@ -792,6 +793,47 @@ def build_lyrics_queries(title, artist, track):
             ordered.append(query)
     return ordered
 
+def normalize_lyrics_key(text):
+    cleaned = clean_lyrics_title(text or "").lower()
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", cleaned)
+    cleaned = re.sub(r"(ft|feat|featuring|prod|with)", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def similarity_score(a, b):
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def choose_best_lrclib_match(results, title, artist, track):
+    target_title = normalize_lyrics_key(track or title)
+    target_artist = normalize_lyrics_key(artist or "")
+    target_combo = normalize_lyrics_key(f"{artist or ''} {track or title}")
+
+    best_result = None
+    best_score = 0.0
+
+    for result in results:
+        result_title = normalize_lyrics_key(result.get("trackName") or result.get("name") or "")
+        result_artist = normalize_lyrics_key(result.get("artistName") or result.get("artist") or "")
+        result_combo = normalize_lyrics_key(f"{result_artist} {result_title}")
+
+        title_score = similarity_score(target_title, result_title)
+        artist_score = similarity_score(target_artist, result_artist) if target_artist else 0.75
+        combo_score = similarity_score(target_combo, result_combo)
+        score = (title_score * 0.5) + (artist_score * 0.2) + (combo_score * 0.3)
+
+        if score > best_score:
+            best_score = score
+            best_result = result
+
+    if best_result and best_score >= 0.72:
+        return best_result
+    return None
+
+
 
 def extract_genius_lyrics(page_html):
     matches = GENIUS_BLOCK_RE.findall(page_html)
@@ -848,12 +890,42 @@ def fetch_lyrics_payload(current):
     title = current.title
     artist = getattr(current, "artist", None)
     track = getattr(current, "track", None)
+    source_url = getattr(current, "webpage_url", None)
 
     genius_result = fetch_genius_lyrics(title, artist, track)
     if genius_result:
-        return genius_result
+        return genius_result, "genius"
 
-    return None
+    for search_query in build_lyrics_queries(title, artist, track):
+        try:
+            lrclib_url = f"https://lrclib.net/api/search?q={quote_plus(search_query)}"
+            response = requests.get(
+                lrclib_url,
+                timeout=10,
+                headers={"User-Agent": "TargetBot/1.0"}
+            )
+            if not response.ok:
+                continue
+            results = response.json()
+        except Exception:
+            continue
+
+        if not isinstance(results, list) or not results:
+            continue
+
+        best = choose_best_lrclib_match(results, title, artist, track)
+        if not best:
+            continue
+
+        lyrics_text = best.get("plainLyrics") or best.get("syncedLyrics")
+        if not lyrics_text:
+            continue
+
+        best_artist = best.get("artistName") or artist or "Unknown artist"
+        best_track = best.get("trackName") or track or title
+        return (lyrics_text, f"{best_artist} - {best_track}", source_url), "lrclib"
+
+    return None, None
 
 
 class LyricsPaginatorView(discord.ui.View):
@@ -909,11 +981,14 @@ async def send_lyrics_panel(send_callable, requester, guild_id):
     if current is None:
         return None
 
-    payload = fetch_lyrics_payload(current)
+    payload, source_name = fetch_lyrics_payload(current)
     if not payload:
-        return await send_callable("Lyrics not found.")
+        return await send_callable("Lyrics not found on Genius or the fallback source.")
 
     lyrics_text, found_label, source_url = payload
+    if source_name == "lrclib":
+        await send_callable(f"Genius missed it, trying a backup source for: **{current.title}**")
+
     lyrics_text = format_lyrics_for_embed(lyrics_text)
     chunks = split_lyrics_chunks(lyrics_text, chunk_size=900)
     view = LyricsPaginatorView(requester, found_label, chunks, source_url)
