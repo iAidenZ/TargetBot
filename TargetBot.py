@@ -779,6 +779,10 @@ def build_lyrics_queries(title, artist, track):
     queries = []
     if cleaned_artist and cleaned_track:
         queries.append(f"{cleaned_artist} {cleaned_track}")
+        queries.append(f"{cleaned_track} {cleaned_artist}")
+        queries.append(f"{cleaned_artist} - {cleaned_track}")
+    if cleaned_track:
+        queries.append(cleaned_track)
     if cleaned_title:
         queries.append(cleaned_title)
     if title and title not in queries:
@@ -792,6 +796,35 @@ def build_lyrics_queries(title, artist, track):
             seen.add(key)
             ordered.append(query)
     return ordered
+
+
+def build_lyrics_pairs(title, artist, track):
+    cleaned_title = clean_lyrics_title(title)
+    cleaned_track = clean_lyrics_title(track or title)
+    cleaned_artist = clean_lyrics_title(artist or "")
+
+    pairs = []
+    if cleaned_artist and cleaned_track:
+        pairs.append((cleaned_artist, cleaned_track))
+    if cleaned_artist and cleaned_title and cleaned_title != cleaned_track:
+        pairs.append((cleaned_artist, cleaned_title))
+
+    title_parts = [part.strip() for part in cleaned_title.split(" - ") if part.strip()]
+    if len(title_parts) >= 2:
+        pairs.append((title_parts[0], title_parts[-1]))
+
+    if artist or track or title:
+        pairs.append((artist or "unknown", track or cleaned_title or title))
+
+    seen = set()
+    ordered = []
+    for artist_name, song_name in pairs:
+        key = (artist_name.strip().lower(), song_name.strip().lower())
+        if key not in seen and key[1]:
+            seen.add(key)
+            ordered.append((artist_name, song_name))
+    return ordered
+
 
 def normalize_lyrics_key(text):
     cleaned = clean_lyrics_title(text or "").lower()
@@ -807,24 +840,32 @@ def similarity_score(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
 
-def choose_best_lrclib_match(results, title, artist, track):
+def score_lyrics_candidate(result_title, result_artist, title, artist, track):
     target_title = normalize_lyrics_key(track or title)
     target_artist = normalize_lyrics_key(artist or "")
     target_combo = normalize_lyrics_key(f"{artist or ''} {track or title}")
+    result_title = normalize_lyrics_key(result_title)
+    result_artist = normalize_lyrics_key(result_artist)
+    result_combo = normalize_lyrics_key(f"{result_artist} {result_title}")
 
+    title_score = similarity_score(target_title, result_title)
+    artist_score = similarity_score(target_artist, result_artist) if target_artist else 0.75
+    combo_score = similarity_score(target_combo, result_combo)
+    return (title_score * 0.5) + (artist_score * 0.2) + (combo_score * 0.3)
+
+
+def choose_best_lrclib_match(results, title, artist, track):
     best_result = None
     best_score = 0.0
 
     for result in results:
-        result_title = normalize_lyrics_key(result.get("trackName") or result.get("name") or "")
-        result_artist = normalize_lyrics_key(result.get("artistName") or result.get("artist") or "")
-        result_combo = normalize_lyrics_key(f"{result_artist} {result_title}")
-
-        title_score = similarity_score(target_title, result_title)
-        artist_score = similarity_score(target_artist, result_artist) if target_artist else 0.75
-        combo_score = similarity_score(target_combo, result_combo)
-        score = (title_score * 0.5) + (artist_score * 0.2) + (combo_score * 0.3)
-
+        score = score_lyrics_candidate(
+            result.get("trackName") or result.get("name") or "",
+            result.get("artistName") or result.get("artist") or "",
+            title,
+            artist,
+            track,
+        )
         if score > best_score:
             best_score = score
             best_result = result
@@ -833,6 +874,27 @@ def choose_best_lrclib_match(results, title, artist, track):
         return best_result
     return None
 
+
+def choose_best_genius_hit(hits, title, artist, track):
+    best_result = None
+    best_score = 0.0
+
+    for hit in hits:
+        result = hit.get("result", {})
+        score = score_lyrics_candidate(
+            result.get("title") or "",
+            result.get("primary_artist", {}).get("name") or "",
+            title,
+            artist,
+            track,
+        )
+        if score > best_score:
+            best_score = score
+            best_result = result
+
+    if best_result and best_score >= 0.62:
+        return best_result
+    return None
 
 
 def extract_genius_lyrics(page_html):
@@ -857,7 +919,7 @@ def extract_genius_lyrics(page_html):
 def fetch_genius_lyrics(title, artist, track):
     for search_query in build_lyrics_queries(title, artist, track):
         try:
-            search_url = f"https://genius.com/api/search/multi?per_page=5&q={quote_plus(search_query)}"
+            search_url = f"https://genius.com/api/search/multi?per_page=8&q={quote_plus(search_query)}"
             response = requests.get(search_url, timeout=10, headers=GENIUS_HEADERS)
             if not response.ok:
                 continue
@@ -866,36 +928,34 @@ def fetch_genius_lyrics(title, artist, track):
             continue
 
         sections = payload.get("response", {}).get("sections", [])
+        hits = []
         for section in sections:
-            for hit in section.get("hits", []):
-                result = hit.get("result", {})
-                song_url = result.get("url")
-                if not song_url:
-                    continue
-                try:
-                    page = requests.get(song_url, timeout=10, headers=GENIUS_HEADERS)
-                except Exception:
-                    continue
-                if not page.ok:
-                    continue
-                lyrics_text = extract_genius_lyrics(page.text)
-                if lyrics_text:
-                    artist_name = result.get("primary_artist", {}).get("name") or artist or "Unknown artist"
-                    song_title = result.get("title") or track or title
-                    return lyrics_text, f"{artist_name} - {song_title}", song_url
+            hits.extend(section.get("hits", []))
+
+        best_result = choose_best_genius_hit(hits, title, artist, track)
+        if not best_result:
+            continue
+
+        song_url = best_result.get("url")
+        if not song_url:
+            continue
+
+        try:
+            page = requests.get(song_url, timeout=10, headers=GENIUS_HEADERS)
+        except Exception:
+            continue
+        if not page.ok:
+            continue
+
+        lyrics_text = extract_genius_lyrics(page.text)
+        if lyrics_text:
+            artist_name = best_result.get("primary_artist", {}).get("name") or artist or "Unknown artist"
+            song_title = best_result.get("title") or track or title
+            return lyrics_text, f"{artist_name} - {song_title}", song_url
     return None
 
 
-def fetch_lyrics_payload(current):
-    title = current.title
-    artist = getattr(current, "artist", None)
-    track = getattr(current, "track", None)
-    source_url = getattr(current, "webpage_url", None)
-
-    genius_result = fetch_genius_lyrics(title, artist, track)
-    if genius_result:
-        return genius_result, "genius"
-
+def fetch_lrclib_lyrics(title, artist, track, source_url):
     for search_query in build_lyrics_queries(title, artist, track):
         try:
             lrclib_url = f"https://lrclib.net/api/search?q={quote_plus(search_query)}"
@@ -924,6 +984,156 @@ def fetch_lyrics_payload(current):
         best_artist = best.get("artistName") or artist or "Unknown artist"
         best_track = best.get("trackName") or track or title
         return (lyrics_text, f"{best_artist} - {best_track}", source_url), "lrclib"
+    return None
+
+
+def fetch_musixmatch_lyrics(title, artist, track, source_url):
+    api_key = os.environ.get("MUSIXMATCH_API_KEY")
+    if not api_key:
+        return None
+
+    for search_query in build_lyrics_queries(title, artist, track):
+        try:
+            search_url = (
+                "https://api.musixmatch.com/ws/1.1/track.search"
+                f"?q_track_artist={quote_plus(search_query)}"
+                f"&page_size=5&s_track_rating=desc&apikey={quote_plus(api_key)}"
+            )
+            response = requests.get(
+                search_url,
+                timeout=10,
+                headers={"User-Agent": "TargetBot/1.0"},
+            )
+            if not response.ok:
+                continue
+            data = response.json()
+        except Exception:
+            continue
+
+        track_list = (
+            data.get("message", {})
+            .get("body", {})
+            .get("track_list", [])
+        )
+        if not track_list:
+            continue
+
+        best_track_data = None
+        best_score = 0.0
+        for item in track_list:
+            track_data = item.get("track", {})
+            score = score_lyrics_candidate(
+                track_data.get("track_name") or "",
+                track_data.get("artist_name") or "",
+                title,
+                artist,
+                track,
+            )
+            if score > best_score:
+                best_score = score
+                best_track_data = track_data
+
+        if not best_track_data or best_score < 0.72:
+            continue
+
+        track_id = best_track_data.get("track_id")
+        if not track_id:
+            continue
+
+        try:
+            lyrics_url = (
+                "https://api.musixmatch.com/ws/1.1/track.lyrics.get"
+                f"?track_id={track_id}&apikey={quote_plus(api_key)}"
+            )
+            response = requests.get(
+                lyrics_url,
+                timeout=10,
+                headers={"User-Agent": "TargetBot/1.0"},
+            )
+            if not response.ok:
+                continue
+            data = response.json()
+        except Exception:
+            continue
+
+        lyrics_text = (
+            data.get("message", {})
+            .get("body", {})
+            .get("lyrics", {})
+            .get("lyrics_body", "")
+            .strip()
+        )
+        if not lyrics_text:
+            continue
+
+        lines = []
+        for line in lyrics_text.splitlines():
+            if "******* This Lyrics is NOT for Commercial use *******" in line:
+                break
+            if line.strip():
+                lines.append(line.rstrip())
+        lyrics_text = "\n".join(lines).strip()
+        if not lyrics_text:
+            continue
+
+        best_artist = best_track_data.get("artist_name") or artist or "Unknown artist"
+        best_name = best_track_data.get("track_name") or track or title
+        return (lyrics_text, f"{best_artist} - {best_name}", source_url), "musixmatch"
+
+    return None
+
+
+def fetch_ovh_lyrics(title, artist, track, source_url):
+    for candidate_artist, candidate_track in build_lyrics_pairs(title, artist, track):
+        try:
+            fallback_url = (
+                f"https://api.lyrics.ovh/v1/"
+                f"{quote_plus(candidate_artist)}/{quote_plus(candidate_track)}"
+            )
+            response = requests.get(
+                fallback_url,
+                timeout=10,
+                headers={"User-Agent": "TargetBot/1.0"}
+            )
+            if not response.ok:
+                continue
+            data = response.json()
+        except Exception:
+            continue
+
+        lyrics_text = data.get("lyrics", "").strip()
+        if not lyrics_text:
+            continue
+
+        score = score_lyrics_candidate(candidate_track, candidate_artist, title, artist, track)
+        if score < 0.68:
+            continue
+
+        return (lyrics_text, f"{candidate_artist} - {candidate_track}", source_url), "lyrics.ovh"
+    return None
+
+
+def fetch_lyrics_payload(current):
+    title = current.title
+    artist = getattr(current, "artist", None)
+    track = getattr(current, "track", None)
+    source_url = getattr(current, "webpage_url", None)
+
+    genius_result = fetch_genius_lyrics(title, artist, track)
+    if genius_result:
+        return genius_result, "genius"
+
+    lrclib_result = fetch_lrclib_lyrics(title, artist, track, source_url)
+    if lrclib_result:
+        return lrclib_result
+
+    musixmatch_result = fetch_musixmatch_lyrics(title, artist, track, source_url)
+    if musixmatch_result:
+        return musixmatch_result
+
+    ovh_result = fetch_ovh_lyrics(title, artist, track, source_url)
+    if ovh_result:
+        return ovh_result
 
     return None, None
 
@@ -983,11 +1193,11 @@ async def send_lyrics_panel(send_callable, requester, guild_id):
 
     payload, source_name = fetch_lyrics_payload(current)
     if not payload:
-        return await send_callable("Lyrics not found on Genius or the fallback source.")
+        return await send_callable("Lyrics not found on Genius or any backup source.")
 
     lyrics_text, found_label, source_url = payload
-    if source_name == "lrclib":
-        await send_callable(f"Genius missed it, trying a backup source for: **{current.title}**")
+    if source_name != "genius":
+        await send_callable(f"Genius missed it, trying **{source_name}** for: **{current.title}**")
 
     lyrics_text = format_lyrics_for_embed(lyrics_text)
     chunks = split_lyrics_chunks(lyrics_text, chunk_size=900)
