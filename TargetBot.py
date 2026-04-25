@@ -13,6 +13,7 @@ from urllib.parse import quote_plus, urlparse
 from functools import partial
 import yt_dlp
 from decimal import Decimal, InvalidOperation
+from html import unescape as html_unescape
 
 DATA_FILE = "/app/data/data.json"
 
@@ -21,7 +22,11 @@ music_now = {}
 music_locks = {}
 recent_play_requests = {}
 music_starting = set()
+music_idle_tasks = {}
+music_text_channels = {}
+music_control_messages = {}
 private_bal = {}
+payment_blocked = {}
 jail_troll_tasks = {}
 jail_guard_active = {}
 guard_cooldown = {}
@@ -153,7 +158,7 @@ DELIVERY_BASE_REWARD_VIP    = (100_000, 100_000)
 
 def load_data():
     global farm_xp, farm_level, player_health, player_lives, player_points, wallet, bank, economy_claims, jail
-    global fishing_xp, fishing_level, fishing_rods_owned, fishing_equipped_rod, private_bal
+    global fishing_xp, fishing_level, fishing_rods_owned, fishing_equipped_rod, private_bal, payment_blocked
     global delivery_vehicles_owned, delivery_equipped_vehicle
     global player_general_xp, player_general_level
     global hooks_owned, hooks_equipped, bait_inventory, bait_equipped
@@ -174,6 +179,7 @@ def load_data():
     economy_claims = {int(k): v for k, v in data.get("economy_claims", {}).items()}
     jail = {int(k): v for k, v in data.get("jail", {}).items()}
     private_bal = {int(k): v for k, v in data.get("private_bal", {}).items()}
+    payment_blocked = {int(k): v for k, v in data.get("payment_blocked", {}).items()}
     fishing_level = {int(k): v for k, v in data.get("fishing_level", {}).items()}
     fishing_xp = {int(k): v for k, v in data.get("fishing_xp", {}).items()}
     fishing_rods_owned = {int(k): v for k, v in data.get("fishing_rods_owned", {}).items()}
@@ -202,6 +208,7 @@ def save_data():
             "jail": {str(k): v for k, v in jail.items()},
             "fishing_xp": {str(k): v for k, v in fishing_xp.items()},
             "private_bal": {str(k): v for k, v in private_bal.items()},
+            "payment_blocked": {str(k): v for k, v in payment_blocked.items()},
             "fishing_level": {str(k): v for k, v in fishing_level.items()},
             "fishing_rods_owned": {str(k): v for k, v in fishing_rods_owned.items()},
             "fishing_equipped_rod": {str(k): v for k, v in fishing_equipped_rod.items()},
@@ -361,29 +368,27 @@ def choose_fish_catch(rod_name: str, hook_name: str = "Basic Hook"):
     )[0]
 
 
-def _legendary_multiplier(rare_bonus: int, legendary_hook_bonus: float = 0.0) -> float:
-    """Scales legendary chance purely on rod + hook. Level has NO effect."""
-    rod_factor  = 1.0 + min(rare_bonus, 30) * 0.033
-    hook_factor = 1.0 + legendary_hook_bonus
-    return min(rod_factor * hook_factor, 3.0)
-
-
-def check_legendary_catch(rod_name: str, hook_name: str = "Basic Hook") -> str | None:
-    """
-    Independent lottery for all legendary fish.
-    SpongeBob:  fixed chance, never scales.
-    Kraken/Bloop/Moby Dick: scale with rod rare_bonus + hook legendary_bonus.
-    Level has NO effect on any fish.
-    """
-    rod_data  = FISHING_RODS[rod_name]
+def _legendary_multiplier(user_id: int, rod_name: str, hook_name: str = "Basic Hook") -> float:
+    """Keep legendary fish extremely rare while giving slight progression scaling."""
+    rod_data = FISHING_RODS[rod_name]
     hook_data = FISHING_HOOKS[hook_name]
-    mult = _legendary_multiplier(rod_data["rare_bonus"], hook_data["legendary_bonus"])
+    level = get_fishing_level_value(user_id)
+
+    rod_factor = 1.0 + min(rod_data["rare_bonus"], 30) * 0.015
+    hook_factor = 1.0 + min(hook_data["legendary_bonus"], 1.0) * 0.25
+    level_factor = 1.0 + min(level, 100) * 0.006
+    return min(rod_factor * hook_factor * level_factor, 2.1)
+
+
+def check_legendary_catch(user_id: int, rod_name: str, hook_name: str = "Basic Hook") -> str | None:
+    """Independent lottery for legendary fish with slight rod/level scaling."""
+    mult = _legendary_multiplier(user_id, rod_name, hook_name)
 
     chances = {
-        "bloop":     FISHING_CATCHES["bloop"]["base_chance"]     * mult,
-        "mobydick":  FISHING_CATCHES["mobydick"]["base_chance"]  * mult,
-        "kraken":    FISHING_CATCHES["kraken"]["base_chance"]    * mult,
-        "spongebob": FISHING_CATCHES["spongebob"]["base_chance"],   # always fixed
+        "bloop": FISHING_CATCHES["bloop"]["base_chance"] * mult,
+        "mobydick": FISHING_CATCHES["mobydick"]["base_chance"] * mult,
+        "kraken": FISHING_CATCHES["kraken"]["base_chance"] * mult,
+        "spongebob": FISHING_CATCHES["spongebob"]["base_chance"],
     }
 
     roll = random.random()
@@ -395,15 +400,14 @@ def check_legendary_catch(rod_name: str, hook_name: str = "Basic Hook") -> str |
     return None
 
 
-def legendary_reward(catch_key: str, rod_name: str) -> int:
-    """
-    SpongeBob always pays flat $1M.
-    All others scale with rod reward_multiplier only — level has NO effect.
-    """
+def legendary_reward(catch_key: str, rod_name: str, user_id: int) -> int:
+    """Legendary rewards scale lightly with rod and fishing level without wrecking the economy."""
     catch = FISHING_CATCHES[catch_key]
     if catch.get("fixed_reward"):
         return catch["base_reward"]
-    return int(catch["base_reward"] * FISHING_RODS[rod_name]["reward_multiplier"])
+
+    level_factor = 1.0 + min(get_fishing_level_value(user_id), 100) * 0.005
+    return int(catch["base_reward"] * FISHING_RODS[rod_name]["reward_multiplier"] * level_factor)
 
 
 def parse_amount_input(raw_amount, *, balance=None, allow_all=False):
@@ -656,6 +660,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.webpage_url = data.get("webpage_url")
         self.artist = data.get("artist") or data.get("uploader") or "Unknown artist"
         self.track = data.get("track") or data.get("alt_title") or self.title
+        self.duration = data.get("duration")
+        self.thumbnail = data.get("thumbnail")
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=True):
@@ -686,6 +692,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
 import requests
 import re
+
+GENIUS_HEADERS = {"User-Agent": "TargetBot/1.0"}
+GENIUS_TAG_RE = re.compile(r"<[^>]+>")
+GENIUS_BLOCK_RE = re.compile(r'<div[^>]+data-lyrics-container="true"[^>]*>(.*?)</div>', re.DOTALL | re.IGNORECASE)
 
 
 def clean_lyrics_title(text):
@@ -740,7 +750,6 @@ def format_lyrics_for_embed(text):
         blank_streak = 0
         formatted_lines.append(line)
 
-        # Add breathing room so the text feels larger / less cramped.
         if len(line) > 25:
             formatted_lines.append("")
 
@@ -756,9 +765,162 @@ def build_lyrics_embed(found_label, chunks, page_index, source_url=None):
         color=discord.Color.magenta()
     )
     if source_url:
-        embed.description += f"\n\n[Open track]({source_url})"
+        embed.description += f"\n\n[Open source]({source_url})"
     embed.set_footer(text=f"Lyrics page {page_index + 1}/{total_pages}")
     return embed
+
+
+def build_lyrics_queries(title, artist, track):
+    cleaned_title = clean_lyrics_title(title)
+    cleaned_track = clean_lyrics_title(track or title)
+    cleaned_artist = clean_lyrics_title(artist or "")
+
+    queries = []
+    if cleaned_artist and cleaned_track:
+        queries.append(f"{cleaned_artist} {cleaned_track}")
+    if cleaned_title:
+        queries.append(cleaned_title)
+    if title and title not in queries:
+        queries.append(title)
+
+    seen = set()
+    ordered = []
+    for query in queries:
+        key = query.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(query)
+    return ordered
+
+
+def extract_genius_lyrics(page_html):
+    matches = GENIUS_BLOCK_RE.findall(page_html)
+    if not matches:
+        return None
+
+    parts = []
+    for block in matches:
+        block = re.sub(r"<br\s*/?>", "\n", block, flags=re.IGNORECASE)
+        block = GENIUS_TAG_RE.sub("", block)
+        block = html_unescape(block)
+        cleaned = "\n".join(line.rstrip() for line in block.splitlines()).strip()
+        if cleaned:
+            parts.append(cleaned)
+
+    if not parts:
+        return None
+    return "\n\n".join(parts).strip()
+
+
+def fetch_genius_lyrics(title, artist, track):
+    for search_query in build_lyrics_queries(title, artist, track):
+        try:
+            search_url = f"https://genius.com/api/search/multi?per_page=5&q={quote_plus(search_query)}"
+            response = requests.get(search_url, timeout=10, headers=GENIUS_HEADERS)
+            if not response.ok:
+                continue
+            payload = response.json()
+        except Exception:
+            continue
+
+        sections = payload.get("response", {}).get("sections", [])
+        for section in sections:
+            for hit in section.get("hits", []):
+                result = hit.get("result", {})
+                song_url = result.get("url")
+                if not song_url:
+                    continue
+                try:
+                    page = requests.get(song_url, timeout=10, headers=GENIUS_HEADERS)
+                except Exception:
+                    continue
+                if not page.ok:
+                    continue
+                lyrics_text = extract_genius_lyrics(page.text)
+                if lyrics_text:
+                    artist_name = result.get("primary_artist", {}).get("name") or artist or "Unknown artist"
+                    song_title = result.get("title") or track or title
+                    return lyrics_text, f"{artist_name} - {song_title}", song_url
+    return None
+
+
+def fetch_lyrics_payload(current):
+    title = current.title
+    artist = getattr(current, "artist", None)
+    track = getattr(current, "track", None)
+    source_url = getattr(current, "webpage_url", None)
+
+    genius_result = fetch_genius_lyrics(title, artist, track)
+    if genius_result:
+        return genius_result
+
+    lyrics_text = None
+    found_label = title
+
+    for search_query in build_lyrics_queries(title, artist, track):
+        lrclib_url = f"https://lrclib.net/api/search?q={quote_plus(search_query)}"
+        response = requests.get(
+            lrclib_url,
+            timeout=10,
+            headers={"User-Agent": "TargetBot/1.0"}
+        )
+
+        if not response.ok:
+            continue
+
+        results = response.json()
+        if not isinstance(results, list) or not results:
+            continue
+
+        best = results[0]
+        lyrics_text = best.get("plainLyrics") or best.get("syncedLyrics")
+        if lyrics_text:
+            best_artist = best.get("artistName") or artist or "Unknown artist"
+            best_track = best.get("trackName") or track or title
+            found_label = f"{best_artist} - {best_track}"
+            break
+
+    if not lyrics_text:
+        cleaned_title = clean_lyrics_title(title)
+        title_parts = [part.strip() for part in cleaned_title.split(" - ") if part.strip()]
+        fallback_pairs = []
+
+        if artist and track:
+            fallback_pairs.append((clean_lyrics_title(artist), clean_lyrics_title(track)))
+        if len(title_parts) > 1:
+            fallback_pairs.append((title_parts[0], title_parts[-1]))
+        fallback_pairs.append((artist or "unknown", track or cleaned_title or title))
+
+        seen_pairs = set()
+        for fallback_artist, fallback_song in fallback_pairs:
+            pair = (fallback_artist.strip().lower(), fallback_song.strip().lower())
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+
+            fallback_url = (
+                f"https://api.lyrics.ovh/v1/"
+                f"{quote_plus(fallback_artist)}/{quote_plus(fallback_song)}"
+            )
+            fallback_response = requests.get(
+                fallback_url,
+                timeout=10,
+                headers={"User-Agent": "TargetBot/1.0"}
+            )
+
+            if not fallback_response.ok:
+                continue
+
+            data = fallback_response.json()
+            if "lyrics" in data and data["lyrics"].strip():
+                lyrics_text = data["lyrics"]
+                found_label = f"{fallback_artist} - {fallback_song}"
+                break
+
+    if not lyrics_text:
+        return None
+
+    return lyrics_text, found_label, source_url
 
 
 class LyricsPaginatorView(discord.ui.View):
@@ -808,6 +970,25 @@ class LyricsPaginatorView(discord.ui.View):
         self._refresh_buttons()
         await interaction.response.edit_message(embed=self.current_embed(), view=self)
 
+
+async def send_lyrics_panel(send_callable, requester, guild_id):
+    current = music_now.get(guild_id)
+    if current is None:
+        return None
+
+    payload = fetch_lyrics_payload(current)
+    if not payload:
+        return await send_callable("Lyrics not found.")
+
+    lyrics_text, found_label, source_url = payload
+    lyrics_text = format_lyrics_for_embed(lyrics_text)
+    chunks = split_lyrics_chunks(lyrics_text, chunk_size=900)
+    view = LyricsPaginatorView(requester, found_label, chunks, source_url)
+    message = await send_callable(embed=view.current_embed(), view=view)
+    view.message = message
+    return message
+
+
 @bot.command()
 async def lyrics(ctx):
     guild = ctx.guild
@@ -815,98 +996,12 @@ async def lyrics(ctx):
     if guild.id not in music_now or music_now[guild.id] is None:
         return await ctx.send("Nothing is playing right now.")
 
-    current = music_now[guild.id]
-    title = current.title
-    artist = getattr(current, "artist", None)
-    track = getattr(current, "track", None)
-    source_url = getattr(current, "webpage_url", None)
-
-    await ctx.send(f"Searching lyrics for: **{title}**")
+    await ctx.send(f"Searching lyrics for: **{music_now[guild.id].title}**")
 
     try:
-        lyrics_text = None
-        found_label = title
-
-        cleaned_title = clean_lyrics_title(title)
-        cleaned_track = clean_lyrics_title(track or title)
-        cleaned_artist = clean_lyrics_title(artist or "")
-
-        search_queries = []
-        if cleaned_artist and cleaned_track:
-            search_queries.append(f"{cleaned_artist} {cleaned_track}")
-        if cleaned_title:
-            search_queries.append(cleaned_title)
-        if title not in search_queries:
-            search_queries.append(title)
-
-        for search_query in search_queries:
-            lrclib_url = f"https://lrclib.net/api/search?q={quote_plus(search_query)}"
-            response = requests.get(
-                lrclib_url,
-                timeout=10,
-                headers={"User-Agent": "TargetBot/1.0"}
-            )
-
-            if not response.ok:
-                continue
-
-            results = response.json()
-            if not isinstance(results, list) or not results:
-                continue
-
-            best = results[0]
-            lyrics_text = best.get("plainLyrics") or best.get("syncedLyrics")
-            if lyrics_text:
-                best_artist = best.get("artistName") or artist or "Unknown artist"
-                best_track = best.get("trackName") or track or title
-                found_label = f"{best_artist} - {best_track}"
-                break
-
-        if not lyrics_text:
-            title_parts = [part.strip() for part in cleaned_title.split(" - ") if part.strip()]
-            fallback_pairs = []
-
-            if cleaned_artist and cleaned_track:
-                fallback_pairs.append((cleaned_artist, cleaned_track))
-            if len(title_parts) > 1:
-                fallback_pairs.append((title_parts[0], title_parts[-1]))
-            fallback_pairs.append((artist or "unknown", track or cleaned_title or title))
-
-            seen_pairs = set()
-            for fallback_artist, fallback_song in fallback_pairs:
-                pair = (fallback_artist.strip().lower(), fallback_song.strip().lower())
-                if pair in seen_pairs:
-                    continue
-                seen_pairs.add(pair)
-
-                fallback_url = (
-                    f"https://api.lyrics.ovh/v1/"
-                    f"{quote_plus(fallback_artist)}/{quote_plus(fallback_song)}"
-                )
-                fallback_response = requests.get(
-                    fallback_url,
-                    timeout=10,
-                    headers={"User-Agent": "TargetBot/1.0"}
-                )
-
-                if not fallback_response.ok:
-                    continue
-
-                data = fallback_response.json()
-                if "lyrics" in data and data["lyrics"].strip():
-                    lyrics_text = data["lyrics"]
-                    found_label = f"{fallback_artist} - {fallback_song}"
-                    break
-
-        if not lyrics_text:
-            return await ctx.send("Lyrics not found.")
-
-        lyrics_text = format_lyrics_for_embed(lyrics_text)
-        chunks = split_lyrics_chunks(lyrics_text, chunk_size=900)
-        view = LyricsPaginatorView(ctx.author, found_label, chunks, source_url)
-        message = await ctx.send(embed=view.current_embed(), view=view)
-        view.message = message
-
+        message = await send_lyrics_panel(ctx.send, ctx.author, guild.id)
+        if message is None:
+            await ctx.send("Nothing is playing right now.")
     except Exception as e:
         print(f"Lyrics error: {e}")
         await ctx.send("Error getting lyrics.")
@@ -979,83 +1074,148 @@ async def on_guild_join(guild):
 
 
 # ================ HELP ==================
+HELP_CATEGORIES = {
+    "economy": {
+        "title": "💰 Economy",
+        "description": (
+            "`!daily` — Daily reward\n"
+            "`!weekly` — Weekly reward\n"
+            "`!monthly` — Monthly reward\n"
+            "`!balance` / `!bal` — Check balance\n"
+            "`!transfer @user amount` — Send coins\n"
+            "`!deposit` / `!dep` — Deposit to bank\n"
+            "`!withdraw` / `!wit` — Withdraw from bank\n"
+            "`!leaderboard` / `!lb` — Richest players\n"
+            "`!private` / `!prv` — Hide balance\n"
+            "`!unprivate` / `!unprv` — Show balance again\n"
+            "`!blockpay` — Block incoming transfers\n"
+            "`!unblockpay` — Allow transfers again"
+        ),
+        "emoji": "💰",
+    },
+    "gambling": {
+        "title": "🎰 Gambling",
+        "description": (
+            "`!slots amount` — Slot machine\n"
+            "`!blackjack amount` / `!bj amount` — Blackjack game"
+        ),
+        "emoji": "🎰",
+    },
+    "jail": {
+        "title": "🚔 Jail / Crime",
+        "description": (
+            "`!rob @user` — Attempt a robbery\n"
+            "`!guard` — Jail guard event\n"
+            "`!escape` — Try to escape jail\n"
+            "`!bail` — Pay to leave jail"
+        ),
+        "emoji": "🚔",
+    },
+    "minigames": {
+        "title": "🎮 Minigames",
+        "description": (
+            "`!fish` — Fishing minigame\n"
+            "`!fishshop` — Rod shop\n"
+            "`!rod <name>` — Equip a rod\n"
+            "`!hookshop` / `!hook <name>` — Hooks\n"
+            "`!baitshop` / `!bait <name>` — Bait system\n"
+            "`!delivery` — Delivery route minigame\n"
+            "`!vehicleshop` / `!vshop` — Vehicle shop\n"
+            "`!vehicle <name>` / `!veh <name>` — Equip vehicle\n"
+            "`!jerk` — Tap minigame\n"
+            "`!bazooka @user` — Reaction fight"
+        ),
+        "emoji": "🎮",
+    },
+    "social": {
+        "title": "💘 Social / Fun",
+        "description": (
+            "`!ship` — Compatibility\n"
+            "`!date` — Random date\n"
+            "`!stalk` — Creepy event\n"
+            "`!gay` — Random picker\n"
+            "`!wanted` — Wanted poster\n"
+            "`!expose @a @b` — Expose someone"
+        ),
+        "emoji": "💘",
+    },
+    "utility": {
+        "title": "🕵️ Utility",
+        "description": (
+            "`!help` — Open this help panel\n"
+            "`!avatar` / `!av` — Show avatar\n"
+            "`!afk <reason>` — Set AFK\n"
+            "`!entity` — Scan event\n"
+            "`!commands` / `!cmds` — Commands website"
+        ),
+        "emoji": "🕵️",
+    },
+    "music": {
+        "title": "🎧 Music",
+        "description": (
+            "`!play <song>` / `!p <song>` — Play music\n"
+            "`!pause` — Pause or resume\n"
+            "`!skip` — Skip current song\n"
+            "`!stop` — Stop and clear queue\n"
+            "`!queue` — Show queue\n"
+            "`!np` — Current song\n"
+            "`!lyrics` — Show lyrics\n"
+            "`!search <query>` — Search SoundCloud\n"
+            "`!join` / `!leave` — Voice controls"
+        ),
+        "emoji": "🎧",
+    },
+}
+
+
+class HelpMenuView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self._add_button("economy", "Economy", "💰", 0)
+        self._add_button("gambling", "Gambling", "🎰", 0)
+        self._add_button("jail", "Jail / Crime", "🚔", 0)
+        self._add_button("minigames", "Minigames", "🎮", 1)
+        self._add_button("social", "Social / Fun", "💘", 1)
+        self._add_button("utility", "Utility", "🕵️", 1)
+        self._add_button("music", "Music", "🎧", 2)
+
+    def _add_button(self, key, label, emoji, row):
+        button = discord.ui.Button(label=label, emoji=emoji, style=discord.ButtonStyle.primary, row=row)
+        button.callback = self._make_callback(key)
+        self.add_item(button)
+
+    def _make_callback(self, key):
+        async def callback(interaction: discord.Interaction):
+            config = HELP_CATEGORIES[key]
+            embed = discord.Embed(
+                title=config["title"],
+                description=config["description"],
+                color=discord.Color.blurple(),
+            )
+            embed.set_footer(text="TargetBot help menu")
+            try:
+                await interaction.user.send(embed=embed)
+                await interaction.response.send_message(
+                    f"Sent the **{config['title']}** commands to your DMs.",
+                    ephemeral=True,
+                )
+            except discord.Forbidden:
+                await interaction.response.send_message(
+                    "I couldn't DM you. Please enable DMs from this server and try again.",
+                    ephemeral=True,
+                )
+        return callback
+
+
 @bot.command()
 async def help(ctx):
-
-    await ctx.message.delete()
-
     embed = discord.Embed(
-        title="📋 TargetBot Commands",
-        description="Here's everything I can do!",
-        color=discord.Color.blurple()
+        title="How can we help u sir?",
+        description="Choose a category below and I'll DM you the command list.",
+        color=discord.Color.blurple(),
     )
-
-    embed.add_field(name="💰 Economy", value=(
-        "`!daily` — Collect coins every 24h\n"
-        "`!weekly` — Weekly reward\n"
-        "`!monthly` — Monthly reward\n"
-        "`!balance` / `!bal` — Check your coin balance\n"
-        "`!transfer @user amount` — Send coins\n"
-        "`!deposit` / `!dep` — Bank deposit\n"
-        "`!withdraw` / `!wit` — Bank withdraw\n"
-        "`!leaderboard` / `!lb` — Richest players\n"
-        "`!private` / `!prv` — Hide your balance"
-    ), inline=False)
-
-    embed.add_field(name="🎰 Gambling", value=(
-        "`!slots amount` — Slot machine\n"
-        "`!blackjack` / `!bj` — Blackjack game"
-    ), inline=False)
-
-    embed.add_field(name="🚔 Jail / Crime", value=(
-        "`!rob @user` — Try to rob someone\n"
-        "`!guard` — Jail guard event\n"
-        "`!escape` — Escape jail\n"
-        "`!bail` — Pay to get out"
-    ), inline=False)
-
-    embed.add_field(name="🎮 Minigames", value=(
-        "`!jerk` — Tap XP game\n"
-        "`!bazooka @user` — Reaction fight game"
-    ), inline=False)
-
-    embed.add_field(name="💘 Social / Fun", value=(
-        "`!ship` — Compatibility\n"
-        "`!date` — Random date\n"
-        "`!stalk` — Creepy message event\n"
-        "`!gay` — Random picker\n"
-        "`!wanted` — Wanted poster\n"
-        "`!expose @a @b` — Expose someone"
-    ), inline=False)
-
-    embed.add_field(name="🕵️ Utility", value=(
-        "`!help` — Show this help menu\n"
-        "`!avatar` / `!av` — Show avatar\n"
-        "`!entity` — Scan system\n"
-        "`!afk reason` — Set AFK\n"
-        "`!ping @user times` — Spam ping (owner)\n"
-        "`!commands` / `!cmds` — Website commands"
-    ), inline=False)
-
-    embed.add_field(name="🎧 Music", value=(
-        "`!join` — Join voice channel\n"
-        "`!leave` — Leave voice\n"
-        "`!play <song/link>` — Play music or add to queue\n"
-        "`!search <query>` — Search SoundCloud\n"
-        "`!skip` — Skip current song\n"
-        "`!stop` — Stop music and clear queue\n"
-        "`!queue` — Show queued songs\n"
-        "`!np` — Show current song"
-    ), inline=False)
-
-    embed.set_footer(text="Use !commands for the commands website 🔥")
-
-    try:
-        await ctx.author.send(embed=embed)
-    except discord.Forbidden:
-        await ctx.send(embed=embed, delete_after=30)
-
-
+    embed.set_footer(text="TargetBot help center")
+    await ctx.send(embed=embed, view=HelpMenuView())
 
 
 # ======= AVATAR =========
@@ -2136,12 +2296,12 @@ async def fish(ctx):
             bait_data     = FISHING_BAITS[used_bait]
 
             # ── Legendary check (independent lottery) ───────────────────────
-            legendary_key = check_legendary_catch(equipped, equipped_hook)
+            legendary_key = check_legendary_catch(user_id, equipped, equipped_hook)
 
             if legendary_key:
                 catch_key = legendary_key
                 catch     = FISHING_CATCHES[catch_key]
-                reward    = legendary_reward(catch_key, equipped)
+                reward    = legendary_reward(catch_key, equipped, user_id)
             else:
                 catch_key = choose_fish_catch(equipped, equipped_hook)
                 catch     = FISHING_CATCHES[catch_key]
@@ -2211,16 +2371,6 @@ async def fish(ctx):
                 color=discord.Color.orange()
             )
             result_embed.add_field(name="Rod", value=equipped, inline=True)
-            result_embed = discord.Embed(
-                title=f"{boot['emoji']} You caught an {boot['name']}",
-                description=(
-                    f"{grid}\n\n"
-                    "Wrong spot or too slow.\n"
-                    "**+0 coins**"
-                ),
-                color=discord.Color.orange()
-            )
-            result_embed.add_field(name="Rod", value=equipped, inline=True)
 
         result_embed.set_footer(text=f"Wallet: {format_coins(get_wallet(user_id))} coins")
         await game_message.edit(embed=result_embed)
@@ -2239,22 +2389,24 @@ async def wish(ctx, *args):
     if not args:
         await ctx.send(
             "**!wish usage:**\n"
-            "`!wish [@user] <amount>` — give coins\n"
-            "`!wish [@user] remove <amount>` — remove coins\n"
-            "`!wish [@user] reset` — reset claim timers\n"
-            "`!wish [@user] rod <rod name>` — give rod\n"
-            "`!wish [@user] remove rod <rod name>` — remove rod\n"
-            "`!wish [@user] hook <hook name>` — give hook\n"
-            "`!wish [@user] remove hook <hook name>` — remove hook\n"
-            "`!wish [@user] bait <bait name> [amount]` — give bait\n"
-            "`!wish [@user] remove bait <bait name> [amount]` — remove bait\n"
-            "`!wish [@user] level <amount>` — add general levels\n"
-            "`!wish [@user] remove level <amount>` — remove general levels\n"
+            "`!wish [@user] <amount>` ? give coins\n"
+            "`!wish [@user] remove <amount>` ? remove coins\n"
+            "`!wish [@user] reset` ? reset claim timers\n"
+            "`!wish [@user] rod <rod name>` ? give rod\n"
+            "`!wish [@user] remove rod <rod name>` ? remove rod\n"
+            "`!wish [@user] vehicle <vehicle name>` ? give vehicle\n"
+            "`!wish [@user] remove vehicle <vehicle name>` ? remove vehicle\n"
+            "`!wish [@user] hook <hook name>` ? give hook\n"
+            "`!wish [@user] remove hook <hook name>` ? remove hook\n"
+            "`!wish [@user] bait <bait name> [amount]` ? give bait\n"
+            "`!wish [@user] remove bait <bait name> [amount]` ? remove bait\n"
+            "`!wish [@user] level <amount>` ? add general levels\n"
+            "`!wish [@user] remove level <amount>` ? remove general levels\n"
             "_Omit @user to target yourself._"
         )
         return
 
-    # ── Resolve optional target ───────────────────────────────────────────────
+    # ?? Resolve optional target ???????????????????????????????????????????????
     target = ctx.author
     parts  = list(args)
     converter = commands.MemberConverter()
@@ -2287,7 +2439,7 @@ async def wish(ctx, *args):
         sub = parts[1].strip().lower()
 
         # ── remove coins ─────────────────────────────────────────────────────
-        if sub not in {"rod", "hook", "bait", "level"}:
+        if sub not in {"rod", "vehicle", "hook", "bait", "level"}:
             # treat parts[1] as a coin amount
             amount = parse_amount_input(parts[1], balance=get_wallet(uid), allow_all=True)
             if amount is None:
@@ -2321,6 +2473,30 @@ async def wish(ctx, *args):
                 fishing_equipped_rod[uid] = "Basic Rod"
             save_data()
             await ctx.send(f"Removed rod **{matched}** from {name_of(target)}.")
+            return
+
+        # ── remove vehicle ───────────────────────────────────────────────────
+        if sub == "vehicle":
+            vehicle_input = " ".join(parts[2:]).strip()
+            if not vehicle_input:
+                await ctx.send("Specify a vehicle name. E.g. `!wish remove vehicle Car`")
+                return
+            matched = next((n for n in DELIVERY_VEHICLES if n.lower() == vehicle_input.lower()), None)
+            if not matched:
+                await ctx.send(f"Unknown vehicle **{vehicle_input}**.")
+                return
+            if matched == "Scooter":
+                await ctx.send("Can't remove the Scooter — it's the default vehicle.")
+                return
+            owned = get_owned_vehicles(uid)
+            if matched not in owned:
+                await ctx.send(f"{name_of(target)} doesn't own **{matched}**.")
+                return
+            owned.remove(matched)
+            if get_equipped_vehicle(uid) == matched:
+                delivery_equipped_vehicle[uid] = "Scooter"
+            save_data()
+            await ctx.send(f"Removed vehicle **{DELIVERY_VEHICLES[matched]['emoji']} {matched}** from {name_of(target)}.")
             return
 
         # ── remove hook ──────────────────────────────────────────────────────
@@ -2426,6 +2602,24 @@ async def wish(ctx, *args):
         await ctx.send(f"Gave rod **{matched}** to {name_of(target)} and equipped it.")
         return
 
+    # ── give vehicle ──────────────────────────────────────────────────────────
+    if action in {"vehicle", "veh"}:
+        vehicle_input = " ".join(parts[1:]).strip()
+        if not vehicle_input:
+            await ctx.send("Specify a vehicle name. E.g. `!wish vehicle Super Van`")
+            return
+        matched = next((n for n in DELIVERY_VEHICLES if n.lower() == vehicle_input.lower()), None)
+        if not matched:
+            await ctx.send(f"Unknown vehicle **{vehicle_input}**. Options: {', '.join(DELIVERY_VEHICLES)}")
+            return
+        owned = get_owned_vehicles(uid)
+        if matched not in owned:
+            owned.append(matched)
+        delivery_equipped_vehicle[uid] = matched
+        save_data()
+        await ctx.send(f"Gave vehicle **{DELIVERY_VEHICLES[matched]['emoji']} {matched}** to {name_of(target)} and equipped it.")
+        return
+
     # ── give hook ─────────────────────────────────────────────────────────────
     if action == "hook":
         hook_input = " ".join(parts[1:]).strip()
@@ -2498,6 +2692,20 @@ async def wish(ctx, *args):
 
 # ===== TRANSFER =====
 @bot.command()
+async def blockpay(ctx):
+    payment_blocked[ctx.author.id] = True
+    save_data()
+    await ctx.send("🔒 You are no longer accepting coin transfers.")
+
+
+@bot.command()
+async def unblockpay(ctx):
+    payment_blocked.pop(ctx.author.id, None)
+    save_data()
+    await ctx.send("🔓 People can send you coins again.")
+
+
+@bot.command()
 async def transfer(ctx, member: discord.Member, amount: str):
     sender = ctx.author.id
     target = member.id
@@ -2505,6 +2713,12 @@ async def transfer(ctx, member: discord.Member, amount: str):
 
     if amount is None or amount <= 0:
         return await ctx.send("Invalid amount.")
+
+    if sender == target:
+        return await ctx.send("You can't send coins to yourself.")
+
+    if payment_blocked.get(target):
+        return await ctx.send(f"{member.mention} isn't accepting payments right now.")
 
     if get_wallet(sender) < amount:
         return await ctx.send("Not enough coins.")
@@ -2516,7 +2730,7 @@ async def transfer(ctx, member: discord.Member, amount: str):
     wallet[target] += amount
     save_data()
 
-    await ctx.send(f"{ctx.author.mention} sent **{amount}** coins to {member.mention}.")
+    await ctx.send(f"{ctx.author.mention} sent **{format_coins(amount)}** coins to {member.mention}.")
 
 
 # ===== DEPOSIT =====
@@ -3972,6 +4186,12 @@ def ensure_music_state(guild_id):
     recent_play_requests.setdefault(guild_id, {})
 
 
+def cancel_music_idle_disconnect(guild_id):
+    task = music_idle_tasks.pop(guild_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
 def cleanup_recent_requests(guild_id):
     ensure_music_state(guild_id)
     now = time.monotonic()
@@ -3993,6 +4213,59 @@ def can_queue_play(guild_id, user_id, query):
 
     recent_play_requests[guild_id][key] = now
     return True, 0
+
+
+def format_duration(seconds):
+    if not seconds:
+        return "Unknown"
+    seconds = int(seconds)
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{sec:02d}"
+    return f"{minutes}:{sec:02d}"
+
+
+def build_music_embed(player, *, paused=False):
+    title = "⏸️ Paused" if paused else "🎶 Now Playing"
+    embed = discord.Embed(
+        title=title,
+        description=f"**{player.title}**",
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Artist", value=player.artist or "Unknown artist", inline=True)
+    embed.add_field(name="Duration", value=format_duration(getattr(player, "duration", None)), inline=True)
+    if getattr(player, "webpage_url", None):
+        embed.add_field(name="Source", value=f"[Open track]({player.webpage_url})", inline=False)
+    if getattr(player, "thumbnail", None):
+        embed.set_thumbnail(url=player.thumbnail)
+    embed.set_footer(text="Pause, stop, skip, or open lyrics below")
+    return embed
+
+
+async def schedule_music_idle_disconnect(guild, text_channel):
+    guild_id = guild.id
+    cancel_music_idle_disconnect(guild_id)
+
+    async def _worker():
+        try:
+            await asyncio.sleep(600)
+            voice_client = guild.voice_client
+            if (
+                voice_client
+                and not voice_client.is_playing()
+                and not voice_client.is_paused()
+                and not music_queue.get(guild_id)
+                and music_now.get(guild_id) is None
+            ):
+                await voice_client.disconnect()
+                await text_channel.send("Left the voice channel after 10 minutes of inactivity.")
+        except asyncio.CancelledError:
+            return
+        finally:
+            music_idle_tasks.pop(guild_id, None)
+
+    music_idle_tasks[guild_id] = bot.loop.create_task(_worker())
 
 
 async def ensure_voice(ctx):
@@ -4020,6 +4293,87 @@ async def ensure_voice(ctx):
 
     return voice_client
 
+
+class MusicControlView(discord.ui.View):
+    def __init__(self, guild_id):
+        super().__init__(timeout=600)
+        self.guild_id = guild_id
+        self.message = None
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        voice_client = interaction.guild.voice_client if interaction.guild else None
+        if voice_client is None or interaction.user.voice is None or interaction.user.voice.channel != voice_client.channel:
+            await interaction.response.send_message("You need to be in my voice channel to use these controls.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            await self.message.edit(view=self)
+
+    @discord.ui.button(label="Pause", style=discord.ButtonStyle.secondary)
+    async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        voice_client = interaction.guild.voice_client
+        current = music_now.get(self.guild_id)
+        if voice_client is None or current is None:
+            await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+            return
+
+        if voice_client.is_paused():
+            voice_client.resume()
+            paused = False
+            note = "Resumed playback."
+        elif voice_client.is_playing():
+            voice_client.pause()
+            paused = True
+            note = "Paused playback."
+        else:
+            await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+            return
+
+        if self.message:
+            await self.message.edit(embed=build_music_embed(current, paused=paused), view=self)
+        await interaction.response.send_message(note, ephemeral=True)
+
+    @discord.ui.button(label="Stop", style=discord.ButtonStyle.danger)
+    async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        voice_client = interaction.guild.voice_client
+        if voice_client is None:
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+            return
+
+        music_queue[self.guild_id].clear()
+        music_now[self.guild_id] = None
+        music_starting.discard(self.guild_id)
+        if voice_client.is_playing() or voice_client.is_paused():
+            voice_client.stop()
+        await interaction.response.send_message("Stopped playback and cleared the queue.", ephemeral=True)
+        channel = music_text_channels.get(self.guild_id)
+        if channel:
+            await schedule_music_idle_disconnect(interaction.guild, channel)
+
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.primary)
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        voice_client = interaction.guild.voice_client
+        if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
+            voice_client.stop()
+            await interaction.response.send_message("Skipped to the next track.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+
+    @discord.ui.button(label="Lyrics", style=discord.ButtonStyle.success)
+    async def lyrics_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        current = music_now.get(self.guild_id)
+        if current is None:
+            await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        await send_lyrics_panel(interaction.followup.send, interaction.user, self.guild_id)
+
+
 @bot.command()
 async def join(ctx):
     voice_client = await ensure_voice(ctx)
@@ -4032,6 +4386,7 @@ async def leave(ctx):
     if ctx.voice_client:
         guild_id = ctx.guild.id
         ensure_music_state(guild_id)
+        cancel_music_idle_disconnect(guild_id)
         music_queue[guild_id].clear()
         music_now[guild_id] = None
         music_starting.discard(guild_id)
@@ -4057,11 +4412,42 @@ async def stop(ctx):
         ctx.voice_client.stop()
 
     await ctx.send("Stopped music and cleared the queue.")
+    await schedule_music_idle_disconnect(ctx.guild, ctx.channel)
+
+
+@bot.command()
+async def pause(ctx):
+    voice_client = ctx.voice_client
+    if voice_client is None:
+        await ctx.send("Nothing is playing.")
+        return
+
+    guild_id = ctx.guild.id
+    current = music_now.get(guild_id)
+    if voice_client.is_paused():
+        voice_client.resume()
+        await ctx.send("Resumed playback.")
+        if current and guild_id in music_control_messages:
+            try:
+                await music_control_messages[guild_id].edit(embed=build_music_embed(current, paused=False))
+            except Exception:
+                pass
+    elif voice_client.is_playing():
+        voice_client.pause()
+        await ctx.send("Paused playback.")
+        if current and guild_id in music_control_messages:
+            try:
+                await music_control_messages[guild_id].edit(embed=build_music_embed(current, paused=True))
+            except Exception:
+                pass
+    else:
+        await ctx.send("Nothing is playing.")
 
 
 async def play_next(ctx):
     guild_id = ctx.guild.id
     ensure_music_state(guild_id)
+    music_text_channels[guild_id] = ctx.channel
 
     voice_client = ctx.guild.voice_client
     if voice_client is None:
@@ -4077,8 +4463,10 @@ async def play_next(ctx):
     if not music_queue[guild_id]:
         music_now[guild_id] = None
         music_starting.discard(guild_id)
+        await schedule_music_idle_disconnect(ctx.guild, ctx.channel)
         return
 
+    cancel_music_idle_disconnect(guild_id)
     next_query = music_queue[guild_id].pop(0)
 
     try:
@@ -4103,6 +4491,8 @@ async def play_next(ctx):
         if music_queue[guild_id]:
             music_starting.add(guild_id)
             bot.loop.create_task(play_next(ctx))
+        else:
+            await schedule_music_idle_disconnect(ctx.guild, ctx.channel)
         return
 
     music_now[guild_id] = player
@@ -4123,13 +4513,18 @@ async def play_next(ctx):
         if music_queue[guild_id]:
             music_starting.add(guild_id)
             bot.loop.create_task(play_next(ctx))
+        else:
+            await schedule_music_idle_disconnect(ctx.guild, ctx.channel)
         return
 
     music_starting.discard(guild_id)
-    await ctx.send(f"Now playing: **{player.title}**")
+    view = MusicControlView(guild_id)
+    message = await ctx.send(embed=build_music_embed(player), view=view)
+    view.message = message
+    music_control_messages[guild_id] = message
 
 
-@bot.command()
+@bot.command(aliases=["p"])
 @commands.cooldown(2, 5, BucketType.user)
 async def play(ctx, *, query):
     voice_client = await ensure_voice(ctx)
@@ -4143,6 +4538,8 @@ async def play(ctx, *, query):
 
     guild_id = ctx.guild.id
     ensure_music_state(guild_id)
+    music_text_channels[guild_id] = ctx.channel
+    cancel_music_idle_disconnect(guild_id)
 
     allowed, wait_time = can_queue_play(guild_id, ctx.author.id, query)
     if not allowed:
@@ -4216,7 +4613,7 @@ async def np(ctx):
         await ctx.send("Nothing is playing right now.")
         return
 
-    await ctx.send(f"Now playing: **{current.title}**")
+    await ctx.send(embed=build_music_embed(current, paused=bool(ctx.voice_client and ctx.voice_client.is_paused())))
 
 
 @bot.command()
@@ -4244,8 +4641,9 @@ async def search(ctx, *, query):
         url = item.get("webpage_url", "No URL")
         embed.add_field(name=f"{index}. {title}", value=url, inline=False)
 
-    embed.set_footer(text="Use !play with the song name or one of these SoundCloud links.")
+    embed.set_footer(text="Use !play or !p with a song name or one of these SoundCloud links.")
     await ctx.send(embed=embed)
+
 
 # ============ BLACKLIST ============
 blacklisted = set()
