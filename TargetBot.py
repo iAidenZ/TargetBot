@@ -1480,59 +1480,23 @@ async def on_guild_join(guild):
         title="👋 Hi, I'm TargetBot",
         description=(
             "Thanks for adding me to your server.\n"
-            "I can handle economy, fun, jail, minigames, and music commands.\n\n"
-            "If you need help, use `!commands`, `!cmds`, or `!help`."
+            "I handle economy, fishing, delivery, pets, companies, minigames, and music.\n\n"
+            "Use `!help` to browse all commands by category."
         ),
         color=discord.Color.blurple()
     )
 
-    embed.add_field(name="💰 Economy", value=(
-        "`!balance` / `!bal @user`\n"
-        "`!daily`\n"
-        "`!weekly`\n"
-        "`!monthly`\n"
-        "`!transfer @user amount`\n"
-        "`!deposit amount` / `!dep`\n"
-        "`!withdraw amount` / `!wit`\n"
-        "`!leaderboard` / `!lb` / `!rich`\n"
-        "`!prv` / `!private` (hide balance)"
-    ), inline=False)
+    embed.add_field(name="💰 Economy", value="`!daily` `!balance` `!transfer` `!deposit` `!leaderboard`", inline=False)
+    embed.add_field(name="🎣 Fishing", value="`!fish` `!fishshop` `!hookshop` `!baitshop`", inline=False)
+    embed.add_field(name="🚦 Delivery", value="`!delivery` `!vehicleshop`", inline=False)
+    embed.add_field(name="🐾 Pet", value="`!pet` `!petshop` `!feed`", inline=False)
+    embed.add_field(name="🏢 Company", value="`!company` `!company buy` `!company upgrade` `!company collect`", inline=False)
+    embed.add_field(name="⬆️ Progression", value="`!level` `!custom`", inline=False)
+    embed.add_field(name="🚔 Crime", value="`!rob` `!escape` `!bail`", inline=False)
+    embed.add_field(name="🎰 Gambling", value="`!slots` `!blackjack`", inline=False)
+    embed.add_field(name="🎧 Music", value="`!play` `!skip` `!queue` `!lyrics`", inline=False)
 
-    embed.add_field(name="🎰 Gambling", value=(
-        "`!slots amount`\n"
-        "`!blackjack amount` / `!bj`"
-    ), inline=False)
-
-    embed.add_field(name="🚔 Jail / Crime System", value=(
-        "`!rob @user`\n"
-        "`!guard`\n"
-        "`!escape`\n"
-        "`!bail`"
-    ), inline=False)
-
-    embed.add_field(name="🎮 Minigames", value=(
-        "`!jerk`\n"
-        "`!bazooka @user`"
-    ), inline=False)
-
-    embed.add_field(name="💘 Social / Fun", value=(
-        "`!ship`\n"
-        "`!date`\n"
-        "`!stalk`\n"
-        "`!gay`\n"
-        "`!wanted`"
-    ), inline=False)
-
-    embed.add_field(name="🕵️ Utility / Admin", value=(
-        "`!entity`\n"
-        "`!expose @accomplice @victim`\n"
-        "`!ping @user times` (owner only)\n"
-        "`!afk reason`\n"
-        "`!help`\n"
-        "`!commands` / `!cmds`"
-    ), inline=False)
-
-    embed.set_footer(text="Need help? Use !commands, !cmds, or !help.")
+    embed.set_footer(text="Use !help for the full interactive command panel.")
 
     for channel in guild.text_channels:
         if channel.permissions_for(guild.me).send_messages:
@@ -1548,12 +1512,12 @@ HELP_CATEGORIES = {
             "`!daily` — Daily reward\n"
             "`!weekly` — Weekly reward\n"
             "`!monthly` — Monthly reward\n"
-            "`!balance` / `!bal` — Check balance\n"
-            "`!transfer @user amount` — Send coins\n"
-            "`!deposit` / `!dep` — Deposit to bank\n"
-            "`!withdraw` / `!wit` — Withdraw from bank\n"
-            "`!leaderboard` / `!lb` — Richest players\n"
-            "`!private` / `!prv` — Hide balance\n"
+            "`!balance` / `!bal [@user]` — Check balance\n"
+            "`!transfer @user <amount>` — Send coins\n"
+            "`!deposit` / `!dep <amount>` — Deposit to bank\n"
+            "`!withdraw` / `!wit <amount>` — Withdraw from bank\n"
+            "`!leaderboard` / `!lb` / `!rich` — Richest players\n"
+            "`!private` / `!prv` — Hide your balance\n"
             "`!unprivate` / `!unprv` — Show balance again\n"
             "`!blockpay` — Block incoming transfers\n"
             "`!unblockpay` — Allow transfers again"
@@ -1563,8 +1527,8 @@ HELP_CATEGORIES = {
     "gambling": {
         "title": "🎰 Gambling",
         "description": (
-            "`!slots amount` — Slot machine\n"
-            "`!blackjack amount` / `!bj amount` — Blackjack game"
+            "`!slots <amount>` — Spin the slot machine\n"
+            "`!blackjack <amount>` / `!bj` — Play blackjack"
         ),
         "emoji": "🎰",
     },
@@ -1574,35 +1538,92 @@ HELP_CATEGORIES = {
             "`!rob @user` — Attempt a robbery\n"
             "`!guard` — Jail guard event\n"
             "`!escape` — Try to escape jail\n"
-            "`!bail` — Pay to leave jail"
+            "`!bail` — Pay coins to leave jail"
         ),
         "emoji": "🚔",
+    },
+    "fishing": {
+        "title": "🎣 Fishing",
+        "description": (
+            "`!fish` — Start a fishing minigame\n"
+            "`!fishshop` — Browse & buy rods (button embed)\n"
+            "`!rod <n>` — Equip a rod you own\n"
+            "`!hookshop` / `!hshop` — Browse & buy hooks\n"
+            "`!hook <n>` — Equip a hook you own\n"
+            "`!baitshop` / `!bshop` — Interactive bait shop\n"
+            "`!buybait <n> <amount>` — Buy bait via command\n"
+            "`!bait <n>` — Equip a bait you have in stock"
+        ),
+        "emoji": "🎣",
+    },
+    "delivery": {
+        "title": "🚦 Delivery",
+        "description": (
+            "`!delivery` — Start a delivery minigame\n"
+            "Follow direction buttons before the timer runs out\n"
+            "Reward depends on speed, vehicle & customer type\n\n"
+            "`!vehicleshop` / `!vshop` — Browse & buy vehicles\n"
+            "`!vehicle <n>` / `!veh` — Equip a vehicle"
+        ),
+        "emoji": "🚦",
+    },
+    "pet": {
+        "title": "🐾 Pet",
+        "description": (
+            "`!pet` — View your pet name, level, XP & hunger\n"
+            "`!petshop` — Buy a pet or food (button embed)\n"
+            "`!feed` — Feed your pet to restore hunger\n"
+            "`!petrename <n>` — Rename your pet (50,000 coins)\n\n"
+            "**Pets & bonuses:**\n"
+            "🐱 Cat — +fishing rare/legendary chance\n"
+            "🐶 Dog — +delivery reward %\n"
+            "🐦 Parrot — +XP from all activities\n"
+            "🐢 Turtle — +passive bank interest\n"
+            "🦊 Fox — +rob success & reduced jail time"
+        ),
+        "emoji": "🐾",
+    },
+    "company": {
+        "title": "🏢 Company",
+        "description": (
+            "`!company` — View your company & hourly income\n"
+            "First use: bot asks for name & one-word concept\n"
+            "💡 Example: Name `KFC`, concept `Chicken`\n\n"
+            "`!company buy <amount>` — Buy units of your resource\n"
+            "`!company upgrade` — Spend resources to level up\n"
+            "`!company collect` — Collect hourly earnings\n\n"
+            "Higher level = more coins generated per hour"
+        ),
+        "emoji": "🏢",
+    },
+    "progression": {
+        "title": "⬆️ Progression & Custom",
+        "description": (
+            "`!level [@user]` / `!rank` / `!lvl`\n"
+            "View general level, XP bar, rod, hook & vehicle\n\n"
+            "`!custom` — Open the customisation menu\n"
+            "Currently: name your own custom rod\n"
+            "Custom rod always mirrors your best owned rod stats"
+        ),
+        "emoji": "⬆️",
     },
     "minigames": {
         "title": "🎮 Minigames",
         "description": (
-            "`!fish` — Fishing minigame\n"
-            "`!fishshop` — Rod shop\n"
-            "`!rod <name>` — Equip a rod\n"
-            "`!hookshop` / `!hook <name>` — Hooks\n"
-            "`!baitshop` / `!bait <name>` — Bait system\n"
-            "`!delivery` — Delivery route minigame\n"
-            "`!vehicleshop` / `!vshop` — Vehicle shop\n"
-            "`!vehicle <name>` / `!veh <name>` — Equip vehicle\n"
-            "`!jerk` — Tap minigame\n"
-            "`!bazooka @user` — Reaction fight"
+            "`!jerk` — Tap XP minigame\n"
+            "`!bazooka @user` — Reaction fight minigame"
         ),
         "emoji": "🎮",
     },
     "social": {
         "title": "💘 Social / Fun",
         "description": (
-            "`!ship` — Compatibility\n"
-            "`!date` — Random date\n"
-            "`!stalk` — Creepy event\n"
-            "`!gay` — Random picker\n"
-            "`!wanted` — Wanted poster\n"
-            "`!expose @a @b` — Expose someone"
+            "`!ship [@user1] [@user2]` — Compatibility check\n"
+            "`!date` — Random date event\n"
+            "`!stalk [@user]` — Creepy stalker event\n"
+            "`!gay` — Random percentage picker\n"
+            "`!wanted` — Generate a wanted poster\n"
+            "`!expose @user1 @user2` — Expose two people"
         ),
         "emoji": "💘",
     },
@@ -1610,25 +1631,25 @@ HELP_CATEGORIES = {
         "title": "🕵️ Utility",
         "description": (
             "`!help` — Open this help panel\n"
-            "`!avatar` / `!av` — Show avatar\n"
-            "`!afk <reason>` — Set AFK\n"
-            "`!entity` — Scan event\n"
-            "`!commands` / `!cmds` — Commands website"
+            "`!commands` / `!cmds` — Commands website link\n"
+            "`!avatar [@user]` / `!av` — Show someone's avatar\n"
+            "`!afk <reason>` — Set AFK status\n"
+            "`!entity [@user]` — Scan a user"
         ),
         "emoji": "🕵️",
     },
     "music": {
         "title": "🎧 Music",
         "description": (
-            "`!play <song>` / `!p <song>` — Play music\n"
+            "`!play <song>` / `!p` — Play a song or add to queue\n"
+            "`!search <query>` — Search SoundCloud\n"
             "`!pause` — Pause or resume\n"
             "`!skip` — Skip current song\n"
             "`!stop` — Stop and clear queue\n"
-            "`!queue` — Show queue\n"
-            "`!np` — Current song\n"
-            "`!lyrics` — Show lyrics\n"
-            "`!search <query>` — Search SoundCloud\n"
-            "`!join` / `!leave` — Voice controls"
+            "`!queue` — Show the queue\n"
+            "`!np` — Now playing\n"
+            "`!lyrics [song]` — Fetch lyrics (Genius first)\n"
+            "`!join` / `!leave` — Voice channel controls"
         ),
         "emoji": "🎧",
     },
@@ -1638,13 +1659,21 @@ HELP_CATEGORIES = {
 class HelpMenuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
-        self._add_button("economy", "Economy", "💰", 0)
-        self._add_button("gambling", "Gambling", "🎰", 0)
-        self._add_button("jail", "Jail / Crime", "🚔", 0)
-        self._add_button("minigames", "Minigames", "🎮", 1)
-        self._add_button("social", "Social / Fun", "💘", 1)
-        self._add_button("utility", "Utility", "🕵️", 1)
-        self._add_button("music", "Music", "🎧", 2)
+        # Row 0
+        self._add_button("economy",     "Economy",      "💰", 0)
+        self._add_button("gambling",    "Gambling",     "🎰", 0)
+        self._add_button("jail",        "Jail/Crime",   "🚔", 0)
+        self._add_button("fishing",     "Fishing",      "🎣", 0)
+        # Row 1
+        self._add_button("delivery",    "Delivery",     "🚦", 1)
+        self._add_button("pet",         "Pet",          "🐾", 1)
+        self._add_button("company",     "Company",      "🏢", 1)
+        self._add_button("progression", "Progression",  "⬆️", 1)
+        # Row 2
+        self._add_button("minigames",   "Minigames",    "🎮", 2)
+        self._add_button("social",      "Social/Fun",   "💘", 2)
+        self._add_button("utility",     "Utility",      "🕵️", 2)
+        self._add_button("music",       "Music",        "🎧", 2)
 
     def _add_button(self, key, label, emoji, row):
         button = discord.ui.Button(label=label, emoji=emoji, style=discord.ButtonStyle.primary, row=row)
