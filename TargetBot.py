@@ -559,44 +559,23 @@ def choose_fish_catch(rod_name: str, hook_name: str = "Basic Hook"):
 
 
 def _legendary_multiplier(user_id: int, rod_name: str, hook_name: str = "Basic Hook") -> float:
-    """Keep legendary fish extremely rare while giving slight progression scaling."""
-    rod_data = FISHING_RODS[rod_name]
+    """Scale legendary chance on rod + hook + general level. No fishing level."""
+    rod_data  = FISHING_RODS[rod_name]
     hook_data = FISHING_HOOKS[hook_name]
-    level = get_fishing_level_value(user_id)
+    gen_level = get_general_level(user_id)
 
-    rod_factor = 1.0 + min(rod_data["rare_bonus"], 40) * 0.02
-    hook_factor = 1.0 + min(hook_data["legendary_bonus"], 4.0) * 0.45
-    level_factor = 1.0 + min(level, 50) * 0.02
+    rod_factor   = 1.0 + min(rod_data["rare_bonus"], 40) * 0.02
+    hook_factor  = 1.0 + min(hook_data["legendary_bonus"], 4.0) * 0.45
+    level_factor = 1.0 + min(gen_level, 50) * 0.02
     return min(rod_factor * hook_factor * level_factor, 7.5)
 
 
-def check_legendary_catch(user_id: int, rod_name: str, hook_name: str = "Basic Hook") -> str | None:
-    """Independent lottery for legendary fish with slight rod/level scaling."""
-    mult = _legendary_multiplier(user_id, rod_name, hook_name)
-
-    chances = {
-        "bloop": FISHING_CATCHES["bloop"]["base_chance"] * mult,
-        "mobydick": FISHING_CATCHES["mobydick"]["base_chance"] * mult,
-        "kraken": FISHING_CATCHES["kraken"]["base_chance"] * mult,
-        "spongebob": FISHING_CATCHES["spongebob"]["base_chance"],
-    }
-
-    roll = random.random()
-    cumulative = 0.0
-    for key, chance in chances.items():
-        cumulative += chance
-        if roll < cumulative:
-            return key
-    return None
-
-
 def legendary_reward(catch_key: str, rod_name: str, user_id: int) -> int:
-    """Legendary rewards scale lightly with rod and fishing level without wrecking the economy."""
+    """Legendary rewards scale with rod and general level."""
     catch = FISHING_CATCHES[catch_key]
     if catch.get("fixed_reward"):
         return catch["base_reward"]
-
-    level_factor = 1.0 + min(get_fishing_level_value(user_id), 100) * 0.005
+    level_factor = 1.0 + min(get_general_level(user_id), 100) * 0.005
     return int(catch["base_reward"] * FISHING_RODS[rod_name]["reward_multiplier"] * level_factor)
 
 
@@ -1573,7 +1552,7 @@ HELP_CATEGORIES = {
             "`!pet` — View your pet name, level, XP & hunger\n"
             "`!petshop` — Buy a pet or food (button embed)\n"
             "`!feed` — Feed your pet to restore hunger\n"
-            "`!petrename <n>` — Rename your pet (50,000 coins)\n\n"
+            "`!rename` — Rename your pet or company (10,000 coins)\n\n"
             "**Pets & bonuses:**\n"
             "🐱 Cat — +fishing rare/legendary chance\n"
             "🐶 Dog — +delivery reward %\n"
@@ -2546,7 +2525,7 @@ async def private(ctx):
     user = ctx.author.id
     private_bal[user] = True
     save_data()
-    await ctx.send("?? your balance is now private")
+    await ctx.send("🔒 your balance is now private")
 
 
 @bot.command(aliases=["unprv"])
@@ -2554,7 +2533,7 @@ async def unprivate(ctx):
     user = ctx.author.id
     private_bal.pop(user, None)
     save_data()
-    await ctx.send("?? your balance is no longer private")
+    await ctx.send("🔓 your balance is no longer private")
 
 
 
@@ -2751,12 +2730,12 @@ async def fish(ctx):
         equipped_hook = get_equipped_hook(user_id)
 
         waiting_embed = discord.Embed(
-            title="?? Fishing Time",
+            title="🎣 Fishing Time",
             description="You threw your bait into the water...\n\nWaiting for a fish...",
             color=discord.Color.blurple()
         )
         waiting_embed.set_footer(
-            text=f"Rod: {rod_display_name} ? Hook: {FISHING_HOOKS[equipped_hook]['emoji']} {equipped_hook}"
+            text=f"Rod: {rod_display_name} | Hook: {FISHING_HOOKS[equipped_hook]['emoji']} {equipped_hook}"
         )
 
         game_message = await ctx.send(embed=waiting_embed)
@@ -2766,7 +2745,7 @@ async def fish(ctx):
         grid = build_fishing_grid(position)
 
         prompt_embed = discord.Embed(
-            title="?? A Fish Appeared!",
+            title="🐟 A Fish Appeared!",
             description=(
                 f"{grid}\n\n"
                 "Quick! Type the position **(1-9)**!\n\n"
@@ -2777,7 +2756,7 @@ async def fish(ctx):
             ),
             color=discord.Color.blue()
         )
-        prompt_embed.set_footer(text=f"Rod: {rod_display_name} ? Time: {rod_data['reaction_time']}s")
+        prompt_embed.set_footer(text=f"Rod: {rod_display_name} | Time: {rod_data['reaction_time']}s")
         await game_message.edit(embed=prompt_embed)
 
         def check(message):
@@ -2812,27 +2791,24 @@ async def fish(ctx):
 
             wallet.setdefault(user_id, 0)
             wallet[user_id] += reward
-            fishing_xp[user_id] = get_fishing_xp(user_id) + random.randint(20, 50)
-            fishing_level[user_id] = fishing_xp[user_id] // 100
 
             gen_xp_gain = random.randint(30, 60) if catch_key != "boot" else 5
             new_gen_level, gen_leveled = add_general_xp(user_id, gen_xp_gain)
             save_data()
 
             bait_line = (
-                f"?? Bait: {bait_data['emoji']} {used_bait}"
+                f"🪱 Bait: {bait_data['emoji']} {used_bait}"
                 + (f" (+{int(bait_data['reward_bonus'] * 100)}% coins)" if bait_data["reward_bonus"] else "")
             )
 
             if legendary_key:
                 result_embed = discord.Embed(
-                    title=f"?? LEGENDARY CATCH! {catch['emoji']} {catch['name']}!",
+                    title=f"🌟 LEGENDARY CATCH! {catch['emoji']} {catch['name']}!",
                     description=(
                         f"{grid}\n\n"
-                        f"?? You pulled up a **{catch['name']}** from the depths!\n\n"
+                        f"⚠️ You pulled up a **{catch['name']}** from the depths!\n\n"
                         f"**+{format_coins(reward)} coins**\n"
                         f"**+{gen_xp_gain} General XP**\n"
-                        f"**Fishing XP:** {fishing_xp[user_id] % 100}/100\n"
                         f"{bait_line}"
                     ),
                     color=discord.Color.gold()
@@ -2844,18 +2820,16 @@ async def fish(ctx):
                         f"{grid}\n\n"
                         f"**+{format_coins(reward)} coins**\n"
                         f"**+{gen_xp_gain} General XP**\n"
-                        f"**Fishing XP:** {fishing_xp[user_id] % 100}/100\n"
                         f"{bait_line}"
                     ),
                     color=discord.Color.green() if catch_key != "boot" else discord.Color.orange()
                 )
 
-            result_embed.add_field(name="?? General Level", value=str(new_gen_level), inline=True)
-            result_embed.add_field(name="?? Rod", value=rod_display_name, inline=True)
-            result_embed.add_field(name="?? Hook", value=f"{FISHING_HOOKS[equipped_hook]['emoji']} {equipped_hook}", inline=True)
-            result_embed.add_field(name="?? Fishing Level", value=str(get_fishing_level_value(user_id)), inline=True)
+            result_embed.add_field(name="⬆️ General Level", value=str(new_gen_level), inline=True)
+            result_embed.add_field(name="🎣 Rod", value=rod_display_name, inline=True)
+            result_embed.add_field(name="🪝 Hook", value=f"{FISHING_HOOKS[equipped_hook]['emoji']} {equipped_hook}", inline=True)
             if gen_leveled:
-                result_embed.add_field(name="?? General Level Up!", value=f"You reached **Level {new_gen_level}**!", inline=False)
+                result_embed.add_field(name="⬆️ General Level Up!", value=f"You reached **Level {new_gen_level}**!", inline=False)
         else:
             boot = FISHING_CATCHES["boot"]
             reward = int(boot["reward"] * rod_data["reward_multiplier"])
@@ -2949,7 +2923,7 @@ def build_pet_embed(user_id: int, owner_name: str):
     if pet["hunger"] <= 15:
         embed.set_footer(text="Your pet is hungry, so its passive bonus is sleeping right now.")
     else:
-        embed.set_footer(text=f"Passive bonus is active. Rename cost: {format_coins(PET_RENAME_COST)} coins")
+        embed.set_footer(text=f"Passive bonus is active. Rename cost: 10,000 coins via !rename")
     return embed
 
 
@@ -3039,22 +3013,102 @@ async def feed(ctx):
     await ctx.send(embed=embed)
 
 
+RENAME_COST = 10_000
+
+
+class RenameView(discord.ui.View):
+    def __init__(self, requester, user_id: int):
+        super().__init__(timeout=120)
+        self.requester = requester
+        self.user_id   = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester.id:
+            await interaction.response.send_message("This isn't your rename panel.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="🐾 Pet", style=discord.ButtonStyle.primary)
+    async def rename_pet_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pet = sync_pet_state(self.user_id)
+        if not pet:
+            await interaction.response.send_message("You don't have a pet yet.", ephemeral=True)
+            return
+        if get_wallet(self.user_id) < RENAME_COST:
+            await interaction.response.send_message(
+                f"You need **{format_coins(RENAME_COST)}** coins to rename your pet.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            f"What do you want to call your pet? (Max 20 characters) — you have 60 seconds.",
+            ephemeral=True
+        )
+        name_input = await prompt_for_author_message(
+            interaction.channel, interaction.user,
+            f"💬 Type your new **pet name** now (max 20 chars):"
+        )
+        if name_input is None:
+            await interaction.followup.send("Rename timed out.", ephemeral=True)
+            return
+        cleaned = sanitize_pet_name(name_input)
+        if not cleaned:
+            await interaction.followup.send("Pet names must be 1-20 characters.", ephemeral=True)
+            return
+        wallet[self.user_id] -= RENAME_COST
+        pet["name"] = cleaned
+        save_data()
+        await interaction.followup.send(
+            f"✅ Your pet is now called **{cleaned}**! (**{format_coins(RENAME_COST)}** coins deducted)",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="🏢 Company", style=discord.ButtonStyle.primary)
+    async def rename_company_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        company = get_company_record(self.user_id)
+        if not company:
+            await interaction.response.send_message("You don't have a company yet.", ephemeral=True)
+            return
+        if get_wallet(self.user_id) < RENAME_COST:
+            await interaction.response.send_message(
+                f"You need **{format_coins(RENAME_COST)}** coins to rename your company.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            f"What do you want to call your company? (Max 24 characters) — you have 60 seconds.",
+            ephemeral=True
+        )
+        name_input = await prompt_for_author_message(
+            interaction.channel, interaction.user,
+            f"💬 Type your new **company name** now (max 24 chars):"
+        )
+        if name_input is None:
+            await interaction.followup.send("Rename timed out.", ephemeral=True)
+            return
+        cleaned = sanitize_company_name(name_input)
+        if not cleaned:
+            await interaction.followup.send("Company names must be 1-24 characters.", ephemeral=True)
+            return
+        wallet[self.user_id] -= RENAME_COST
+        company["name"] = cleaned
+        save_data()
+        await interaction.followup.send(
+            f"✅ Your company is now called **{cleaned}**! (**{format_coins(RENAME_COST)}** coins deducted)",
+            ephemeral=True
+        )
+
+
 @bot.command()
-async def petrename(ctx, *, new_name: str = None):
-    pet = sync_pet_state(ctx.author.id)
-    if not pet:
-        return await ctx.send("You don't have a pet yet.")
-    if not new_name:
-        return await ctx.send("Usage: `!petrename <new name>`")
-    cleaned = sanitize_pet_name(new_name)
-    if not cleaned:
-        return await ctx.send("Pet names must be 1-20 characters.")
-    if get_wallet(ctx.author.id) < PET_RENAME_COST:
-        return await ctx.send(f"You need **{format_coins(PET_RENAME_COST)}** coins to rename your pet.")
-    wallet[ctx.author.id] -= PET_RENAME_COST
-    pet['name'] = cleaned
-    save_data()
-    await ctx.send(f"Renamed your pet to **{cleaned}** for **{format_coins(PET_RENAME_COST)}** coins.")
+async def rename(ctx):
+    """Open the rename panel — pet or company."""
+    embed = discord.Embed(
+        title="✏️ What do you want to rename?",
+        description=(
+            f"Choose a button below.\n\n"
+            f"💰 Rename cost: **{format_coins(RENAME_COST)}** coins"
+        ),
+        color=discord.Color.blurple(),
+    )
+    await ctx.send(embed=embed, view=RenameView(ctx.author, ctx.author.id))
 
 
 class CustomRodView(discord.ui.View):
@@ -3069,7 +3123,7 @@ class CustomRodView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Rod", style=discord.ButtonStyle.primary, emoji="??")
+    @discord.ui.button(label="🎣 Rod", style=discord.ButtonStyle.primary)
     async def custom_rod_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         entry = get_custom_rod_entry(self.user_id)
 
@@ -3209,12 +3263,21 @@ async def company(ctx):
     if not company_name:
         return await ctx.send("Company names must be 1-24 characters.")
 
-    concept_input = await prompt_for_author_message(ctx.channel, ctx.author, "Now send your company concept as **one word**. Example: `Coffee`")
+    concept_input = await prompt_for_author_message(ctx.channel, ctx.author, "Now send your company concept as **one word**. Example: `Coffee`\n\n💡 *Think of KFC — their concept is `Chicken`. You'll buy more of it to grow your company!*")
     if concept_input is None:
         return await ctx.send("Company setup timed out.")
     concept = sanitize_company_concept(concept_input)
     if not concept:
         return await ctx.send("Concept must be one clean word, like `Coffee` or `Steel`.")
+
+    COMPANY_CREATION_COST = 100_000_000
+    if get_wallet(user_id) < COMPANY_CREATION_COST:
+        return await ctx.send(
+            f"Starting a company costs **{format_coins(COMPANY_CREATION_COST)}** coins. "
+            f"You only have **{format_coins(get_wallet(user_id))}** coins."
+        )
+
+    wallet[user_id] -= COMPANY_CREATION_COST
 
     company_data[user_id] = {
         "name": company_name,
