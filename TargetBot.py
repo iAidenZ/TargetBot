@@ -120,10 +120,10 @@ FISHING_CATCHES = {
     "shark":  {"emoji": "🦈",  "name": "Shark",       "reward": 100_000},
     "boot":   {"emoji": "👢",  "name": "Old Boot",    "reward": 100},
     # ── Legendary fish ──────────────────────────────────────────────────
-    "kraken":   {"emoji": "🦑", "name": "Kraken",    "base_reward": 1_000_000,  "base_chance": 0.001,  "scales_level": False},
-    "bloop":    {"emoji": "🌊", "name": "Bloop",     "base_reward": 3_000_000,  "base_chance": 0.0005, "scales_level": False},
-    "mobydick": {"emoji": "🐋", "name": "Moby Dick", "base_reward": 10_000_000, "base_chance": 0.0001, "scales_level": False},
-    "spongebob":{"emoji": "🧽", "name": "SpongeBob", "base_reward": 1_000_000,  "base_chance": 0.0029, "scales_level": False, "fixed_reward": True},
+    "kraken":   {"emoji": "🦑", "name": "Kraken",    "base_reward": 1_000_000,  "base_chance": 0.01,  "scales_level": False},
+    "bloop":    {"emoji": "🌊", "name": "Bloop",     "base_reward": 3_000_000,  "base_chance": 0.005, "scales_level": False},
+    "mobydick": {"emoji": "🐋", "name": "Moby Dick", "base_reward": 10_000_000, "base_chance": 0.001, "scales_level": False},
+    "spongebob":{"emoji": "🧽", "name": "SpongeBob", "base_reward": 1_000_000,  "base_chance": 0.029, "scales_level": False, "fixed_reward": True},
 }
 
 # ── Fishing hooks ────────────────────────────────────────────────────────────
