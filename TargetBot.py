@@ -2902,7 +2902,7 @@ async def fish(ctx):
 
 def sanitize_pet_name(name: str) -> str:
     cleaned = " ".join(name.strip().split())
-    if not cleaned or len(cleaned) > 50:
+    if not cleaned or len(cleaned) > 100:
         return ""
     return cleaned
 
@@ -3151,19 +3151,19 @@ class RenameView(discord.ui.View):
             )
             return
         await interaction.response.send_message(
-            f"What do you want to call your pet? (Max 50 characters) — you have 60 seconds.",
+            f"What do you want to call your pet? (Max 20 characters) — you have 60 seconds.",
             ephemeral=True
         )
         name_input = await prompt_for_author_message(
             interaction.channel, interaction.user,
-            f"💬 Type your new **pet name** now (max 50 chars):"
+            f"💬 Type your new **pet name** now (max 20 chars):"
         )
         if name_input is None:
             await interaction.followup.send("Rename timed out.", ephemeral=True)
             return
         cleaned = sanitize_pet_name(name_input)
         if not cleaned:
-            await interaction.followup.send("Pet names must be 1-50 characters.", ephemeral=True)
+            await interaction.followup.send("Pet names must be 1-20 characters.", ephemeral=True)
             return
         wallet[self.user_id] -= RENAME_COST
         pet["name"] = cleaned
