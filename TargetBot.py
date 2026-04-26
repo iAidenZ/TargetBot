@@ -3096,6 +3096,40 @@ class RenameView(discord.ui.View):
             ephemeral=True
         )
 
+    @discord.ui.button(label="💡 Concept", style=discord.ButtonStyle.secondary)
+    async def rename_concept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        company = get_company_record(self.user_id)
+        if not company:
+            await interaction.response.send_message("You don't have a company yet.", ephemeral=True)
+            return
+        if get_wallet(self.user_id) < RENAME_COST:
+            await interaction.response.send_message(
+                f"You need **{format_coins(RENAME_COST)}** coins to change your concept.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            f"What's your new concept? Must be **one word** (e.g. `Coffee`, `Steel`). You have 60 seconds.",
+            ephemeral=True
+        )
+        concept_input = await prompt_for_author_message(
+            interaction.channel, interaction.user,
+            f"💬 Type your new **concept** now — one word only (e.g. `Chicken`, `Gold`):"
+        )
+        if concept_input is None:
+            await interaction.followup.send("Rename timed out.", ephemeral=True)
+            return
+        cleaned = sanitize_company_concept(concept_input)
+        if not cleaned:
+            await interaction.followup.send("Concept must be one clean word, like `Coffee` or `Steel`.", ephemeral=True)
+            return
+        wallet[self.user_id] -= RENAME_COST
+        company["concept"] = cleaned
+        save_data()
+        await interaction.followup.send(
+            f"✅ Your company concept is now **{cleaned}**! (**{format_coins(RENAME_COST)}** coins deducted)",
+            ephemeral=True
+        )
+
 
 @bot.command()
 async def rename(ctx):
@@ -3104,7 +3138,10 @@ async def rename(ctx):
         title="✏️ What do you want to rename?",
         description=(
             f"Choose a button below.\n\n"
-            f"💰 Rename cost: **{format_coins(RENAME_COST)}** coins"
+            f"🐾 **Pet** — rename your pet\n"
+            f"🏢 **Company** — rename your company\n"
+            f"💡 **Concept** — change your company's resource word\n\n"
+            f"💰 Cost: **{format_coins(RENAME_COST)}** coins each"
         ),
         color=discord.Color.blurple(),
     )
