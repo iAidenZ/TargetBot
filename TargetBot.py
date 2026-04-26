@@ -396,7 +396,7 @@ def get_company_record(user_id: int):
         return None
 
     company.setdefault("name", "My Company")
-    company.setdefault("concept", "Widgets")
+    company.setdefault("product", "Widgets")
     company.setdefault("level", 1)
     company.setdefault("resource", 0)
     company.setdefault("stored_income", 0)
@@ -405,8 +405,8 @@ def get_company_record(user_id: int):
 
 
 def company_resource_label(company: dict) -> str:
-    concept = company.get("concept", "Widget")
-    return f"{concept} Crates"
+    product = company.get("product", "Widget")
+    return f"{product} Crates"
 
 
 def company_hourly_income(level: int) -> int:
@@ -1566,8 +1566,8 @@ HELP_CATEGORIES = {
         "title": "🏢 Company",
         "description": (
             "`!company` — View your company & hourly income\n"
-            "First use: bot asks for name & one-word concept\n"
-            "💡 Example: Name `KFC`, concept `Chicken`\n\n"
+            "First use: bot asks for name & one-word product\n"
+            "💡 Example: Name `KFC`, product `Chicken`\n\n"
             "`!company buy <amount>` — Buy units of your resource\n"
             "`!company upgrade` — Spend resources to level up\n"
             "`!company collect` — Collect hourly earnings\n\n"
@@ -2870,8 +2870,8 @@ def sanitize_company_name(name: str) -> str:
     return cleaned
 
 
-def sanitize_company_concept(concept: str) -> str:
-    cleaned = concept.strip()
+def sanitize_company_product(product: str) -> str:
+    cleaned = product.strip()
     if not cleaned or " " in cleaned:
         return ""
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,15}", cleaned):
@@ -3096,37 +3096,37 @@ class RenameView(discord.ui.View):
             ephemeral=True
         )
 
-    @discord.ui.button(label="💡 Concept", style=discord.ButtonStyle.secondary)
-    async def rename_concept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="💡 product", style=discord.ButtonStyle.secondary)
+    async def rename_product_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         company = get_company_record(self.user_id)
         if not company:
             await interaction.response.send_message("You don't have a company yet.", ephemeral=True)
             return
         if get_wallet(self.user_id) < RENAME_COST:
             await interaction.response.send_message(
-                f"You need **{format_coins(RENAME_COST)}** coins to change your concept.", ephemeral=True
+                f"You need **{format_coins(RENAME_COST)}** coins to change your product.", ephemeral=True
             )
             return
         await interaction.response.send_message(
-            f"What's your new concept? Must be **one word** (e.g. `Coffee`, `Steel`). You have 60 seconds.",
+            f"What's your new product? Must be **one word** (e.g. `Coffee`, `Steel`). You have 60 seconds.",
             ephemeral=True
         )
-        concept_input = await prompt_for_author_message(
+        product_input = await prompt_for_author_message(
             interaction.channel, interaction.user,
-            f"💬 Type your new **concept** now — one word only (e.g. `Chicken`, `Gold`):"
+            f"💬 Type your new **product** now — one word only (e.g. `Chicken`, `Gold`):"
         )
-        if concept_input is None:
+        if product_input is None:
             await interaction.followup.send("Rename timed out.", ephemeral=True)
             return
-        cleaned = sanitize_company_concept(concept_input)
+        cleaned = sanitize_company_product(product_input)
         if not cleaned:
-            await interaction.followup.send("Concept must be one clean word, like `Coffee` or `Steel`.", ephemeral=True)
+            await interaction.followup.send("product must be one clean word, like `Coffee` or `Steel`.", ephemeral=True)
             return
         wallet[self.user_id] -= RENAME_COST
-        company["concept"] = cleaned
+        company["product"] = cleaned
         save_data()
         await interaction.followup.send(
-            f"✅ Your company concept is now **{cleaned}**! (**{format_coins(RENAME_COST)}** coins deducted)",
+            f"✅ Your company product is now **{cleaned}**! (**{format_coins(RENAME_COST)}** coins deducted)",
             ephemeral=True
         )
 
@@ -3140,7 +3140,7 @@ async def rename(ctx):
             f"Choose a button below.\n\n"
             f"🐾 **Pet** — rename your pet\n"
             f"🏢 **Company** — rename your company\n"
-            f"💡 **Concept** — change your company's resource word\n\n"
+            f"💡 **product** — change your company's resource word\n\n"
             f"💰 Cost: **{format_coins(RENAME_COST)}** coins each"
         ),
         color=discord.Color.blurple(),
@@ -3252,6 +3252,211 @@ async def custom(ctx):
     await ctx.send(embed=embed, view=CustomRodView(ctx.author, ctx.author.id))
 
 
+COMPANY_BUY_AMOUNTS = [1, 5, 10, 25, 50]
+COMPANY_UPGRADE_AMOUNTS = [1, 3, 5, 10]
+
+
+def company_max_upgrades(company: dict) -> int:
+    level = company["level"]
+    resource = company["resource"]
+    upgrades = 0
+
+    while resource >= company_upgrade_resource_cost(level):
+        resource -= company_upgrade_resource_cost(level)
+        level += 1
+        upgrades += 1
+
+    return upgrades
+
+
+def apply_company_buy(user_id: int, amount: int):
+    company = get_company_record(user_id)
+    if not company:
+        return False, "Create your company first with `!company`."
+    if amount <= 0:
+        return False, "Pick a valid amount."
+
+    unit_cost = company_resource_unit_cost(company["level"])
+    total_cost = unit_cost * amount
+    if get_wallet(user_id) < total_cost:
+        return False, f"You need **{format_coins(total_cost)}** coins."
+
+    wallet[user_id] -= total_cost
+    company["resource"] += amount
+    save_data()
+    return True, f"Bought **{format_coins(amount)} {company_resource_label(company)}** for **{format_coins(total_cost)}** coins."
+
+
+def apply_company_upgrade(user_id: int, times: int):
+    company = get_company_record(user_id)
+    if not company:
+        return False, "Create your company first with `!company`."
+    if times <= 0:
+        return False, "Pick at least one upgrade."
+
+    level = company["level"]
+    resource_left = company["resource"]
+    total_cost = 0
+    completed = 0
+
+    for _ in range(times):
+        next_cost = company_upgrade_resource_cost(level)
+        if resource_left < next_cost:
+            break
+        resource_left -= next_cost
+        total_cost += next_cost
+        level += 1
+        completed += 1
+
+    if completed == 0:
+        return False, f"You need **{format_coins(company_upgrade_resource_cost(company['level']))} {company_resource_label(company)}** to upgrade."
+
+    company["resource"] = resource_left
+    company["level"] = level
+    save_data()
+    return True, (
+        f"Upgraded **{company['name']}** by **{completed} level(s)**.\n"
+        f"Spent **{format_coins(total_cost)} {company_resource_label(company)}**.\n"
+        f"Hourly income is now **{format_coins(company_hourly_income(company['level']))}** coins."
+    )
+
+
+def apply_company_collect(user_id: int):
+    company = sync_company_income(user_id)
+    if not company:
+        return False, "Create your company first with `!company`."
+
+    stored = company.get("stored_income", 0)
+    if stored <= 0:
+        return False, "Your company has nothing ready to collect yet."
+
+    payout = int(stored * pet_bonus_multiplier(user_id, "company"))
+    wallet.setdefault(user_id, 0)
+    wallet[user_id] += payout
+    company["stored_income"] = 0
+    save_data()
+    return True, f"Collected **{format_coins(payout)}** coins from **{company['name']}**."
+
+
+class CompanyPanelView(discord.ui.View):
+    def __init__(self, requester, user_id: int, selected_mode: str = None, selected_amount: int = 1):
+        super().__init__(timeout=180)
+        self.requester = requester
+        self.user_id = user_id
+        self.selected_mode = selected_mode
+        self.selected_amount = selected_amount
+        self._build()
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester.id:
+            await interaction.response.send_message("This isn't your company panel.", ephemeral=True)
+            return False
+        return True
+
+    def _build(self):
+        self.clear_items()
+
+        modes = [
+            ("Buy Product", "buy", discord.ButtonStyle.primary),
+            ("Upgrade", "upgrade", discord.ButtonStyle.success),
+            ("Collect Money", "collect", discord.ButtonStyle.secondary),
+        ]
+        for label, mode, style in modes:
+            button = discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.danger if self.selected_mode == mode else style,
+                row=0,
+            )
+            button.callback = self._mode_callback(mode)
+            self.add_item(button)
+
+        if self.selected_mode == "buy":
+            for index, qty in enumerate(COMPANY_BUY_AMOUNTS):
+                button = discord.ui.Button(
+                    label=f"x{qty}",
+                    style=discord.ButtonStyle.success if self.selected_amount == qty else discord.ButtonStyle.secondary,
+                    row=1,
+                )
+                button.callback = self._amount_callback(qty)
+                self.add_item(button)
+
+            confirm = discord.ui.Button(label=f"Buy x{self.selected_amount}", style=discord.ButtonStyle.primary, row=2)
+            confirm.callback = self._confirm_buy
+            self.add_item(confirm)
+
+        elif self.selected_mode == "upgrade":
+            company = get_company_record(self.user_id)
+            max_upgrades = company_max_upgrades(company) if company else 0
+            upgrade_options = COMPANY_UPGRADE_AMOUNTS + (["Max"] if max_upgrades > 0 else [])
+
+            for index, qty in enumerate(upgrade_options):
+                compare_value = max_upgrades if qty == "Max" else qty
+                selected = self.selected_amount == compare_value
+                button = discord.ui.Button(
+                    label=f"x{qty}",
+                    style=discord.ButtonStyle.success if selected else discord.ButtonStyle.secondary,
+                    row=1,
+                )
+                button.callback = self._amount_callback(compare_value)
+                self.add_item(button)
+
+            confirm = discord.ui.Button(label=f"Upgrade x{self.selected_amount}", style=discord.ButtonStyle.success, row=2)
+            confirm.callback = self._confirm_upgrade
+            self.add_item(confirm)
+
+    def _mode_callback(self, mode: str):
+        async def callback(interaction: discord.Interaction):
+            if mode == "collect":
+                ok, message = apply_company_collect(self.user_id)
+                self.selected_mode = None
+                self._build()
+                await interaction.response.edit_message(
+                    content=message,
+                    embed=build_company_embed(self.user_id, interaction.user.display_name),
+                    view=self,
+                )
+                return
+
+            self.selected_mode = mode
+            self.selected_amount = 1
+            self._build()
+            await interaction.response.edit_message(
+                content=None,
+                embed=build_company_embed(self.user_id, interaction.user.display_name),
+                view=self,
+            )
+        return callback
+
+    def _amount_callback(self, amount: int):
+        async def callback(interaction: discord.Interaction):
+            self.selected_amount = max(1, amount)
+            self._build()
+            await interaction.response.edit_message(
+                content=None,
+                embed=build_company_embed(self.user_id, interaction.user.display_name),
+                view=self,
+            )
+        return callback
+
+    async def _confirm_buy(self, interaction: discord.Interaction):
+        ok, message = apply_company_buy(self.user_id, self.selected_amount)
+        self._build()
+        await interaction.response.edit_message(
+            content=message,
+            embed=build_company_embed(self.user_id, interaction.user.display_name),
+            view=self,
+        )
+
+    async def _confirm_upgrade(self, interaction: discord.Interaction):
+        ok, message = apply_company_upgrade(self.user_id, self.selected_amount)
+        self._build()
+        await interaction.response.edit_message(
+            content=message,
+            embed=build_company_embed(self.user_id, interaction.user.display_name),
+            view=self,
+        )
+
+
 def build_company_embed(user_id: int, owner_name: str):
     company = sync_company_income(user_id)
     if not company:
@@ -3265,7 +3470,7 @@ def build_company_embed(user_id: int, owner_name: str):
     resource_name = company_resource_label(company)
     embed = discord.Embed(
         title=f"{company['name']}",
-        description=f"{owner_name}'s {company['concept']} company",
+        description=f"{owner_name}'s {company['product']} company",
         color=discord.Color.dark_teal(),
     )
     embed.add_field(name="Level", value=str(company['level']), inline=True)
@@ -3282,7 +3487,7 @@ def build_company_embed(user_id: int, owner_name: str):
         value=f"{format_coins(company_resource_unit_cost(company['level']))} coins each",
         inline=False,
     )
-    embed.set_footer(text="Commands: !company buy <amount> ? !company upgrade ? !company collect")
+    embed.set_footer(text="Use the buttons below to buy product, upgrade levels, or collect money.")
     return embed
 
 
@@ -3291,7 +3496,10 @@ async def company(ctx):
     user_id = ctx.author.id
     current = get_company_record(user_id)
     if current:
-        return await ctx.send(embed=build_company_embed(user_id, ctx.author.display_name))
+        return await ctx.send(
+            embed=build_company_embed(user_id, ctx.author.display_name),
+            view=CompanyPanelView(ctx.author, user_id),
+        )
 
     name_input = await prompt_for_author_message(ctx.channel, ctx.author, "Send your company name. Max 24 characters.")
     if name_input is None:
@@ -3300,12 +3508,12 @@ async def company(ctx):
     if not company_name:
         return await ctx.send("Company names must be 1-24 characters.")
 
-    concept_input = await prompt_for_author_message(ctx.channel, ctx.author, "Now send your company concept as **one word**. Example: `Coffee`\n\n💡 *Think of KFC — their concept is `Chicken`. You'll buy more of it to grow your company!*")
-    if concept_input is None:
+    product_input = await prompt_for_author_message(ctx.channel, ctx.author, "Now send your company product as **one word**. Example: `Coffee`\n\n💡 *Think of KFC — their product is `Chicken`. You'll buy more of it to grow your company!*")
+    if product_input is None:
         return await ctx.send("Company setup timed out.")
-    concept = sanitize_company_concept(concept_input)
-    if not concept:
-        return await ctx.send("Concept must be one clean word, like `Coffee` or `Steel`.")
+    product = sanitize_company_product(product_input)
+    if not product:
+        return await ctx.send("product must be one clean word, like `Coffee` or `Steel`.")
 
     COMPANY_CREATION_COST = 100_000_000
     if get_wallet(user_id) < COMPANY_CREATION_COST:
@@ -3318,62 +3526,40 @@ async def company(ctx):
 
     company_data[user_id] = {
         "name": company_name,
-        "concept": concept,
+        "product": product,
         "level": 1,
         "resource": 0,
         "stored_income": 0,
         "last_tick": int(time.time()),
     }
     save_data()
-    await ctx.send(embed=build_company_embed(user_id, ctx.author.display_name))
+    await ctx.send(
+        embed=build_company_embed(user_id, ctx.author.display_name),
+        view=CompanyPanelView(ctx.author, user_id),
+    )
 
 
 @company.command(name="buy")
 async def company_buy(ctx, amount: str = None):
-    company = get_company_record(ctx.author.id)
-    if not company:
-        return await ctx.send("Create your company first with `!company`.")
     amount_value = parse_amount_input(amount, balance=10**12, allow_all=False)
     if amount_value is None or amount_value <= 0:
         return await ctx.send("Usage: `!company buy <amount>`")
-    unit_cost = company_resource_unit_cost(company['level'])
-    total_cost = unit_cost * amount_value
-    if get_wallet(ctx.author.id) < total_cost:
-        return await ctx.send(f"You need **{format_coins(total_cost)}** coins.")
-    wallet[ctx.author.id] -= total_cost
-    company['resource'] += amount_value
-    save_data()
-    await ctx.send(f"Bought **{format_coins(amount_value)} {company_resource_label(company)}** for **{format_coins(total_cost)}** coins.")
+    ok, message = apply_company_buy(ctx.author.id, amount_value)
+    await ctx.send(message)
 
 
 @company.command(name="upgrade")
-async def company_upgrade(ctx):
-    company = get_company_record(ctx.author.id)
-    if not company:
-        return await ctx.send("Create your company first with `!company`.")
-    cost = company_upgrade_resource_cost(company['level'])
-    if company['resource'] < cost:
-        return await ctx.send(f"You need **{format_coins(cost)} {company_resource_label(company)}** to upgrade.")
-    company['resource'] -= cost
-    company['level'] += 1
-    save_data()
-    await ctx.send(f"Upgraded **{company['name']}** to **Level {company['level']}**. Hourly income is now **{format_coins(company_hourly_income(company['level']))}** coins.")
+async def company_upgrade(ctx, times: int = 1):
+    if times <= 0:
+        return await ctx.send("Usage: `!company upgrade <times>`")
+    ok, message = apply_company_upgrade(ctx.author.id, times)
+    await ctx.send(message)
 
 
 @company.command(name="collect")
 async def company_collect(ctx):
-    company = sync_company_income(ctx.author.id)
-    if not company:
-        return await ctx.send("Create your company first with `!company`.")
-    stored = company.get('stored_income', 0)
-    if stored <= 0:
-        return await ctx.send("Your company has nothing ready to collect yet.")
-    payout = int(stored * pet_bonus_multiplier(ctx.author.id, 'company'))
-    wallet.setdefault(ctx.author.id, 0)
-    wallet[ctx.author.id] += payout
-    company['stored_income'] = 0
-    save_data()
-    await ctx.send(f"Collected **{format_coins(payout)}** coins from **{company['name']}**.")
+    ok, message = apply_company_collect(ctx.author.id)
+    await ctx.send(message)
 
 
 # ============== Owner Power =============
@@ -5694,8 +5880,6 @@ async def check_blacklist(ctx):
 # =========== TOKEN ==============
 
 bot.run(os.environ.get("TOKEN"))
-
-
 
 
 
