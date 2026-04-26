@@ -66,8 +66,16 @@ bait_equipped: dict[int, str]    = {}
 delivery_active = set()
 delivery_vehicles_owned: dict[int, list] = {}
 delivery_equipped_vehicle: dict[int, str] = {}
+pet_data: dict[int, dict] = {}
+company_data: dict[int, dict] = {}
+custom_rod_data: dict[int, dict] = {}
 
 OWNER_ID = 756539405463978024
+PET_MAX_LEVEL = 50
+PET_RENAME_COST = 50_000
+CUSTOM_ROD_UNLOCK_COST = 5_000_000
+CUSTOM_ROD_RENAME_COST = 500_000
+COMPANY_NAME_MAX_LENGTH = 24
 
 FISHING_RODS = {
     "Basic Rod": {
@@ -120,10 +128,10 @@ FISHING_CATCHES = {
     "shark":  {"emoji": "🦈",  "name": "Shark",       "reward": 100_000},
     "boot":   {"emoji": "👢",  "name": "Old Boot",    "reward": 100},
     # ── Legendary fish ──────────────────────────────────────────────────
-    "kraken":   {"emoji": "🦑", "name": "Kraken",    "base_reward": 1_000_000,  "base_chance": 0.01,  "scales_level": False},
-    "bloop":    {"emoji": "🌊", "name": "Bloop",     "base_reward": 3_000_000,  "base_chance": 0.005, "scales_level": False},
-    "mobydick": {"emoji": "🐋", "name": "Moby Dick", "base_reward": 10_000_000, "base_chance": 0.001, "scales_level": False},
-    "spongebob":{"emoji": "🧽", "name": "SpongeBob", "base_reward": 1_000_000,  "base_chance": 0.029, "scales_level": False, "fixed_reward": True},
+    "kraken":   {"emoji": "🦑", "name": "Kraken",    "base_reward": 1_000_000,  "base_chance": 0.001,   "scales_level": False},
+    "bloop":    {"emoji": "🌊", "name": "Bloop",     "base_reward": 3_000_000,  "base_chance": 0.0005,  "scales_level": False},
+    "mobydick": {"emoji": "🐋", "name": "Moby Dick", "base_reward": 10_000_000, "base_chance": 0.00012, "scales_level": False},
+    "spongebob":{"emoji": "🧽", "name": "SpongeBob", "base_reward": 1_000_000,  "base_chance": 0.0015,  "scales_level": False, "fixed_reward": True},
 }
 
 # ── Fishing hooks ────────────────────────────────────────────────────────────
@@ -132,6 +140,7 @@ FISHING_HOOKS = {
     "Iron Hook":    {"price": 5_000,   "level_req": 3,  "emoji": "⚙️", "rare_bonus": 5,  "shark_bonus": 1,  "legendary_bonus": 0.0},
     "Golden Hook":  {"price": 50_000,  "level_req": 10, "emoji": "🥇", "rare_bonus": 12, "shark_bonus": 3,  "legendary_bonus": 0.25},
     "Diamond Hook": {"price": 500_000, "level_req": 25, "emoji": "💎", "rare_bonus": 20, "shark_bonus": 6,  "legendary_bonus": 0.75},
+    "Abyssal Hook": {"price": 25_000_000, "level_req": 45, "emoji": "🌌", "rare_bonus": 42, "shark_bonus": 18, "legendary_bonus": 3.6},
 }
 
 # ── Fishing bait ─────────────────────────────────────────────────────────────
@@ -157,6 +166,37 @@ DELIVERY_VIP_CHANCE     = 0.05        # 5 % chance of VIP customer
 DELIVERY_BASE_REWARD_NORMAL = (800,  2_500)
 DELIVERY_BASE_REWARD_VIP    = (100_000, 100_000)
 
+PET_SHOP = {
+    "Cat": {
+        "price": 250_000,
+        "emoji": "🐈",
+        "bonus_type": "company",
+        "bonus_value": 0.08,
+        "bonus_label": "+8% company income",
+    },
+    "Dog": {
+        "price": 250_000,
+        "emoji": "🐕",
+        "bonus_type": "fishing",
+        "bonus_value": 0.10,
+        "bonus_label": "+10% fishing rewards",
+    },
+    "Fox": {
+        "price": 500_000,
+        "emoji": "🦊",
+        "bonus_type": "delivery",
+        "bonus_value": 0.12,
+        "bonus_label": "+12% delivery rewards",
+    },
+    "Dragon": {
+        "price": 2_500_000,
+        "emoji": "🐉",
+        "bonus_type": "all",
+        "bonus_value": 0.15,
+        "bonus_label": "+15% company, fishing, and delivery rewards",
+    },
+}
+
 
 def load_data():
     global farm_xp, farm_level, player_health, player_lives, player_points, wallet, bank, economy_claims, jail
@@ -164,6 +204,7 @@ def load_data():
     global delivery_vehicles_owned, delivery_equipped_vehicle
     global player_general_xp, player_general_level
     global hooks_owned, hooks_equipped, bait_inventory, bait_equipped
+    global pet_data, company_data, custom_rod_data
 
     if not os.path.exists(DATA_FILE):
         return
@@ -194,6 +235,9 @@ def load_data():
     hooks_equipped = {int(k): v for k, v in data.get("hooks_equipped", {}).items()}
     bait_inventory = {int(k): v for k, v in data.get("bait_inventory", {}).items()}
     bait_equipped  = {int(k): v for k, v in data.get("bait_equipped", {}).items()}
+    pet_data = {int(k): v for k, v in data.get("pet_data", {}).items()}
+    company_data = {int(k): v for k, v in data.get("company_data", {}).items()}
+    custom_rod_data = {int(k): v for k, v in data.get("custom_rod_data", {}).items()}
 
 
 def save_data():
@@ -222,6 +266,9 @@ def save_data():
             "hooks_equipped": {str(k): v for k, v in hooks_equipped.items()},
             "bait_inventory": {str(k): v for k, v in bait_inventory.items()},
             "bait_equipped":  {str(k): v for k, v in bait_equipped.items()},
+            "pet_data": {str(k): v for k, v in pet_data.items()},
+            "company_data": {str(k): v for k, v in company_data.items()},
+            "custom_rod_data": {str(k): v for k, v in custom_rod_data.items()},
         }, f, indent=4)
 
 
@@ -281,6 +328,135 @@ def add_general_xp(user_id: int, amount: int) -> tuple[int, bool]:
     player_general_level[user_id] = new_level
     return new_level, new_level > old_level
 
+
+def get_pet_record(user_id: int):
+    return pet_data.get(user_id)
+
+
+def sync_pet_state(user_id: int):
+    pet = pet_data.get(user_id)
+    if not pet:
+        return None
+
+    pet.setdefault("type", "Cat")
+    pet.setdefault("name", pet["type"])
+    pet.setdefault("xp", 0)
+    pet.setdefault("level", 1)
+    pet.setdefault("hunger", 100)
+    pet.setdefault("last_hunger_tick", int(time.time()))
+
+    now = int(time.time())
+    elapsed_hours = max(0, (now - pet["last_hunger_tick"]) // 3600)
+    if elapsed_hours:
+        pet["hunger"] = max(0, pet["hunger"] - (elapsed_hours * 8))
+        pet["last_hunger_tick"] += elapsed_hours * 3600
+
+    level = min(PET_MAX_LEVEL, 1 + (pet["xp"] // 120))
+    pet["level"] = max(1, level)
+    return pet
+
+
+def pet_bonus_multiplier(user_id: int, bonus_type: str) -> float:
+    pet = sync_pet_state(user_id)
+    if not pet:
+        return 1.0
+
+    hunger = pet.get("hunger", 0)
+    if hunger <= 15:
+        return 1.0
+
+    pet_info = PET_SHOP.get(pet.get("type"))
+    if not pet_info:
+        return 1.0
+
+    if pet_info["bonus_type"] not in {bonus_type, "all"}:
+        return 1.0
+
+    level_scale = 1.0 + ((pet.get("level", 1) - 1) * 0.01)
+    hunger_scale = 0.6 + min(hunger, 100) / 250
+    return 1.0 + (pet_info["bonus_value"] * level_scale * hunger_scale)
+
+
+def feed_pet(user_id: int):
+    pet = sync_pet_state(user_id)
+    if not pet:
+        return None
+
+    before_level = pet["level"]
+    pet["hunger"] = min(100, pet.get("hunger", 0) + 30)
+    pet["last_hunger_tick"] = int(time.time())
+    pet["xp"] += 20
+    pet["level"] = min(PET_MAX_LEVEL, 1 + (pet["xp"] // 120))
+    return pet, pet["level"] > before_level
+
+
+def get_company_record(user_id: int):
+    company = company_data.get(user_id)
+    if not company:
+        return None
+
+    company.setdefault("name", "My Company")
+    company.setdefault("concept", "Widgets")
+    company.setdefault("level", 1)
+    company.setdefault("resource", 0)
+    company.setdefault("stored_income", 0)
+    company.setdefault("last_tick", int(time.time()))
+    return company
+
+
+def company_resource_label(company: dict) -> str:
+    concept = company.get("concept", "Widget")
+    return f"{concept} Crates"
+
+
+def company_hourly_income(level: int) -> int:
+    return int(350 * (level ** 1.35))
+
+
+def company_resource_unit_cost(level: int) -> int:
+    return 60 + (level * 35)
+
+
+def company_upgrade_resource_cost(level: int) -> int:
+    return 20 + (level * 14)
+
+
+def sync_company_income(user_id: int):
+    company = get_company_record(user_id)
+    if not company:
+        return None
+
+    now = int(time.time())
+    elapsed = max(0, now - company.get("last_tick", now))
+    if elapsed:
+        per_second = company_hourly_income(company["level"]) / 3600
+        company["stored_income"] += int(elapsed * per_second)
+        company["last_tick"] = now
+    return company
+
+
+def get_custom_rod_entry(user_id: int):
+    entry = custom_rod_data.setdefault(user_id, {"unlocked": False, "name": "Custom Rod"})
+    entry.setdefault("unlocked", False)
+    entry.setdefault("name", "Custom Rod")
+    return entry
+
+
+def has_custom_rod(user_id: int) -> bool:
+    return bool(get_custom_rod_entry(user_id).get("unlocked"))
+
+
+def get_custom_rod_display_name(user_id: int) -> str:
+    entry = get_custom_rod_entry(user_id)
+    return entry.get("name", "Custom Rod")[:20] or "Custom Rod"
+
+
+def get_best_owned_real_rod(user_id: int) -> str:
+    rods = [name for name in get_owned_rods(user_id) if name in FISHING_RODS and name != "Custom Rod"]
+    if not rods:
+        return "Basic Rod"
+    return max(rods, key=lambda name: FISHING_RODS[name]["price"])
+
 # ── Hook helpers ─────────────────────────────────────────────────────────────
 def get_owned_hooks(user_id: int) -> list:
     hooks = hooks_owned.setdefault(user_id, ["Basic Hook"])
@@ -326,6 +502,8 @@ def get_owned_rods(user_id):
     rods = fishing_rods_owned.setdefault(user_id, ["Basic Rod"])
     if "Basic Rod" not in rods:
         rods.insert(0, "Basic Rod")
+    if has_custom_rod(user_id) and "Custom Rod" not in rods:
+        rods.append("Custom Rod")
     return rods
 
 
@@ -339,10 +517,20 @@ def get_equipped_rod(user_id):
 
 def find_rod_name(name):
     wanted = str(name).strip().lower()
+    if wanted in {"custom", "custom rod"}:
+        return "Custom Rod"
     for rod_name in FISHING_RODS:
         if rod_name.lower() == wanted:
             return rod_name
     return None
+
+
+def resolve_rod_profile(user_id: int, equipped_name: str = None):
+    equipped_name = equipped_name or get_equipped_rod(user_id)
+    if equipped_name == "Custom Rod" and has_custom_rod(user_id):
+        base_name = get_best_owned_real_rod(user_id)
+        return base_name, get_custom_rod_display_name(user_id), FISHING_RODS[base_name]
+    return equipped_name, equipped_name, FISHING_RODS[equipped_name]
 
 
 def build_fishing_grid(catch_position):
@@ -376,10 +564,10 @@ def _legendary_multiplier(user_id: int, rod_name: str, hook_name: str = "Basic H
     hook_data = FISHING_HOOKS[hook_name]
     level = get_fishing_level_value(user_id)
 
-    rod_factor = 1.0 + min(rod_data["rare_bonus"], 30) * 0.015
-    hook_factor = 1.0 + min(hook_data["legendary_bonus"], 1.0) * 0.25
-    level_factor = 1.0 + min(level, 100) * 0.006
-    return min(rod_factor * hook_factor * level_factor, 2.1)
+    rod_factor = 1.0 + min(rod_data["rare_bonus"], 40) * 0.02
+    hook_factor = 1.0 + min(hook_data["legendary_bonus"], 4.0) * 0.45
+    level_factor = 1.0 + min(level, 50) * 0.02
+    return min(rod_factor * hook_factor * level_factor, 7.5)
 
 
 def check_legendary_catch(user_id: int, rod_name: str, hook_name: str = "Basic Hook") -> str | None:
@@ -2491,10 +2679,14 @@ async def rod(ctx, *, rod_name: str = None):
 
     if not rod_name:
         equipped = get_equipped_rod(user_id)
-        await ctx.send(f"Your equipped rod is **{equipped}**.")
+        _, display_name, _ = resolve_rod_profile(user_id, equipped)
+        await ctx.send(f"Your equipped rod is **{display_name}**.")
         return
 
     matched_rod = find_rod_name(rod_name)
+    if not matched_rod and has_custom_rod(user_id):
+        if rod_name.strip().lower() == get_custom_rod_display_name(user_id).lower():
+            matched_rod = "Custom Rod"
     if not matched_rod:
         await ctx.send("Unknown rod. Use `!fishshop` to see available rods.")
         return
@@ -2505,7 +2697,8 @@ async def rod(ctx, *, rod_name: str = None):
 
     fishing_equipped_rod[user_id] = matched_rod
     save_data()
-    await ctx.send(f"Equipped **{matched_rod}**.")
+    _, display_name, _ = resolve_rod_profile(user_id, matched_rod)
+    await ctx.send(f"Equipped **{display_name}**.")
 
 
 @bot.command()
@@ -2525,24 +2718,26 @@ async def fish(ctx):
             equipped = "Basic Rod"
             fishing_equipped_rod[user_id] = equipped
 
-        rod_data = FISHING_RODS[equipped]
+        base_rod_name, rod_display_name, rod_data = resolve_rod_profile(user_id, equipped)
+        equipped_hook = get_equipped_hook(user_id)
 
         waiting_embed = discord.Embed(
-            title="🎣 Fishing Time",
+            title="?? Fishing Time",
             description="You threw your bait into the water...\n\nWaiting for a fish...",
             color=discord.Color.blurple()
         )
-        waiting_embed.set_footer(text=f"Rod: {equipped}")
+        waiting_embed.set_footer(
+            text=f"Rod: {rod_display_name} ? Hook: {FISHING_HOOKS[equipped_hook]['emoji']} {equipped_hook}"
+        )
 
         game_message = await ctx.send(embed=waiting_embed)
-
         await asyncio.sleep(2)
 
         position = random.randint(1, 9)
         grid = build_fishing_grid(position)
 
         prompt_embed = discord.Embed(
-            title="🎣 A Fish Appeared!",
+            title="?? A Fish Appeared!",
             description=(
                 f"{grid}\n\n"
                 "Quick! Type the position **(1-9)**!\n\n"
@@ -2553,7 +2748,7 @@ async def fish(ctx):
             ),
             color=discord.Color.blue()
         )
-        prompt_embed.set_footer(text=f"Rod: {equipped} • Time: {rod_data['reaction_time']}s")
+        prompt_embed.set_footer(text=f"Rod: {rod_display_name} ? Time: {rod_data['reaction_time']}s")
         await game_message.edit(embed=prompt_embed)
 
         def check(message):
@@ -2570,50 +2765,45 @@ async def fish(ctx):
             guess = None
 
         if guess == position:
-            equipped_hook = get_equipped_hook(user_id)
-            used_bait     = consume_bait(user_id)
-            bait_data     = FISHING_BAITS[used_bait]
-
-            # ── Legendary check (independent lottery) ───────────────────────
-            legendary_key = check_legendary_catch(user_id, equipped, equipped_hook)
+            used_bait = consume_bait(user_id)
+            bait_data = FISHING_BAITS[used_bait]
+            legendary_key = check_legendary_catch(user_id, base_rod_name, equipped_hook)
 
             if legendary_key:
                 catch_key = legendary_key
-                catch     = FISHING_CATCHES[catch_key]
-                reward    = legendary_reward(catch_key, equipped, user_id)
+                catch = FISHING_CATCHES[catch_key]
+                reward = legendary_reward(catch_key, base_rod_name, user_id)
             else:
-                catch_key = choose_fish_catch(equipped, equipped_hook)
-                catch     = FISHING_CATCHES[catch_key]
-                reward    = int(catch["reward"] * rod_data["reward_multiplier"])
+                catch_key = choose_fish_catch(base_rod_name, equipped_hook)
+                catch = FISHING_CATCHES[catch_key]
+                reward = int(catch["reward"] * rod_data["reward_multiplier"])
 
-            # ── Bait coin bonus ──────────────────────────────────────────────
             reward = int(reward * (1.0 + bait_data["reward_bonus"]))
-            # ────────────────────────────────────────────────────────────────
+            reward = int(reward * pet_bonus_multiplier(user_id, "fishing"))
 
             wallet.setdefault(user_id, 0)
             wallet[user_id] += reward
+            fishing_xp[user_id] = get_fishing_xp(user_id) + random.randint(20, 50)
+            fishing_level[user_id] = fishing_xp[user_id] // 100
 
-            if catch_key != "boot":
-                gen_xp_gain = random.randint(30, 60)
-            else:
-                gen_xp_gain = 5
+            gen_xp_gain = random.randint(30, 60) if catch_key != "boot" else 5
             new_gen_level, gen_leveled = add_general_xp(user_id, gen_xp_gain)
-
             save_data()
 
             bait_line = (
-                f"🎣 Bait: {bait_data['emoji']} {used_bait}"
-                + (f" (+{int(bait_data['reward_bonus']*100)}% coins)" if bait_data["reward_bonus"] else "")
+                f"?? Bait: {bait_data['emoji']} {used_bait}"
+                + (f" (+{int(bait_data['reward_bonus'] * 100)}% coins)" if bait_data["reward_bonus"] else "")
             )
 
             if legendary_key:
                 result_embed = discord.Embed(
-                    title=f"🌟 LEGENDARY CATCH! {catch['emoji']} {catch['name']}!",
+                    title=f"?? LEGENDARY CATCH! {catch['emoji']} {catch['name']}!",
                     description=(
                         f"{grid}\n\n"
-                        f"⚠️ You pulled up a **{catch['name']}** from the depths!\n\n"
+                        f"?? You pulled up a **{catch['name']}** from the depths!\n\n"
                         f"**+{format_coins(reward)} coins**\n"
                         f"**+{gen_xp_gain} General XP**\n"
+                        f"**Fishing XP:** {fishing_xp[user_id] % 100}/100\n"
                         f"{bait_line}"
                     ),
                     color=discord.Color.gold()
@@ -2625,18 +2815,22 @@ async def fish(ctx):
                         f"{grid}\n\n"
                         f"**+{format_coins(reward)} coins**\n"
                         f"**+{gen_xp_gain} General XP**\n"
+                        f"**Fishing XP:** {fishing_xp[user_id] % 100}/100\n"
                         f"{bait_line}"
                     ),
                     color=discord.Color.green() if catch_key != "boot" else discord.Color.orange()
                 )
-            result_embed.add_field(name="⬆️ General Level", value=str(new_gen_level), inline=True)
-            result_embed.add_field(name="🎣 Rod", value=equipped, inline=True)
-            result_embed.add_field(name="🪝 Hook", value=f"{FISHING_HOOKS[equipped_hook]['emoji']} {equipped_hook}", inline=True)
+
+            result_embed.add_field(name="?? General Level", value=str(new_gen_level), inline=True)
+            result_embed.add_field(name="?? Rod", value=rod_display_name, inline=True)
+            result_embed.add_field(name="?? Hook", value=f"{FISHING_HOOKS[equipped_hook]['emoji']} {equipped_hook}", inline=True)
+            result_embed.add_field(name="?? Fishing Level", value=str(get_fishing_level_value(user_id)), inline=True)
             if gen_leveled:
-                result_embed.add_field(name="⬆️ General Level Up!", value=f"You reached **Level {new_gen_level}**!", inline=False)
+                result_embed.add_field(name="?? General Level Up!", value=f"You reached **Level {new_gen_level}**!", inline=False)
         else:
             boot = FISHING_CATCHES["boot"]
             reward = int(boot["reward"] * rod_data["reward_multiplier"])
+            reward = int(reward * pet_bonus_multiplier(user_id, "fishing"))
             wallet.setdefault(user_id, 0)
             wallet[user_id] += reward
             save_data()
@@ -2649,13 +2843,408 @@ async def fish(ctx):
                 ),
                 color=discord.Color.orange()
             )
-            result_embed.add_field(name="Rod", value=equipped, inline=True)
+            result_embed.add_field(name="Rod", value=rod_display_name, inline=True)
 
         result_embed.set_footer(text=f"Wallet: {format_coins(get_wallet(user_id))} coins")
         await game_message.edit(embed=result_embed)
 
     finally:
         fishing_active.discard(user_id)
+
+
+
+def sanitize_pet_name(name: str) -> str:
+    cleaned = " ".join(name.strip().split())
+    if not cleaned or len(cleaned) > 20:
+        return ""
+    return cleaned
+
+
+def sanitize_company_name(name: str) -> str:
+    cleaned = " ".join(name.strip().split())
+    if not cleaned or len(cleaned) > COMPANY_NAME_MAX_LENGTH:
+        return ""
+    return cleaned
+
+
+def sanitize_company_concept(concept: str) -> str:
+    cleaned = concept.strip()
+    if not cleaned or " " in cleaned:
+        return ""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,15}", cleaned):
+        return ""
+    return cleaned.capitalize()
+
+
+def sanitize_custom_rod_name(name: str) -> str:
+    cleaned = " ".join(name.strip().split())
+    if not cleaned or len(cleaned) > 20:
+        return ""
+    return cleaned
+
+
+async def prompt_for_author_message(channel, author, prompt_text: str, *, timeout: float = 60.0):
+    if prompt_text:
+        await channel.send(prompt_text)
+
+    def check(message):
+        return message.author.id == author.id and message.channel == channel
+
+    try:
+        message = await bot.wait_for("message", timeout=timeout, check=check)
+        return message.content.strip()
+    except asyncio.TimeoutError:
+        return None
+
+
+def build_pet_embed(user_id: int, owner_name: str):
+    pet = sync_pet_state(user_id)
+    if not pet:
+        return discord.Embed(
+            title="Pet Profile",
+            description="You don't have a pet yet. Use `!petshop` to adopt one.",
+            color=discord.Color.orange(),
+        )
+
+    pet_info = PET_SHOP[pet["type"]]
+    embed = discord.Embed(
+        title=f"{pet_info['emoji']} {pet['name']}",
+        description=f"{owner_name}'s loyal companion",
+        color=discord.Color.teal(),
+    )
+    embed.add_field(name="Type", value=pet["type"], inline=True)
+    embed.add_field(name="Level", value=str(pet["level"]), inline=True)
+    embed.add_field(name="Hunger", value=f"{pet['hunger']}/100", inline=True)
+    embed.add_field(name="Passive", value=pet_info["bonus_label"], inline=False)
+    embed.add_field(name="Next Feed", value="Use `!feed` to keep bonuses active.", inline=False)
+    if pet["hunger"] <= 15:
+        embed.set_footer(text="Your pet is hungry, so its passive bonus is sleeping right now.")
+    else:
+        embed.set_footer(text=f"Passive bonus is active. Rename cost: {format_coins(PET_RENAME_COST)} coins")
+    return embed
+
+
+class PetShopView(discord.ui.View):
+    def __init__(self, requester, user_id: int):
+        super().__init__(timeout=120)
+        self.requester = requester
+        self.user_id = user_id
+        for index, (pet_name, pet_info) in enumerate(PET_SHOP.items()):
+            button = discord.ui.Button(
+                label=f"{pet_info['emoji']} {pet_name}",
+                style=discord.ButtonStyle.primary,
+                row=index // 2,
+            )
+            button.callback = self._make_callback(pet_name)
+            self.add_item(button)
+
+    def _make_callback(self, pet_name: str):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.requester.id:
+                await interaction.response.send_message("This isn't your pet shop.", ephemeral=True)
+                return
+            if get_pet_record(self.user_id):
+                await interaction.response.send_message("You already have a pet. One pet per user.", ephemeral=True)
+                return
+            price = PET_SHOP[pet_name]["price"]
+            if get_wallet(self.user_id) < price:
+                await interaction.response.send_message(
+                    f"You need **{format_coins(price)}** coins to adopt **{pet_name}**.",
+                    ephemeral=True,
+                )
+                return
+            wallet[self.user_id] -= price
+            pet_data[self.user_id] = {
+                "type": pet_name,
+                "name": pet_name,
+                "xp": 0,
+                "level": 1,
+                "hunger": 100,
+                "last_hunger_tick": int(time.time()),
+            }
+            save_data()
+            await interaction.response.edit_message(
+                embed=build_pet_embed(self.user_id, interaction.user.display_name),
+                view=None,
+            )
+        return callback
+
+
+@bot.command()
+async def pet(ctx):
+    await ctx.send(embed=build_pet_embed(ctx.author.id, ctx.author.display_name))
+
+
+@bot.command()
+async def petshop(ctx):
+    embed = discord.Embed(
+        title="Pet Shop",
+        description="Adopt one pet. Pets give passive bonuses while they stay fed.",
+        color=discord.Color.blurple(),
+    )
+    for pet_name, pet_info in PET_SHOP.items():
+        embed.add_field(
+            name=f"{pet_info['emoji']} {pet_name}",
+            value=f"Price: {format_coins(pet_info['price'])} coins\n{pet_info['bonus_label']}",
+            inline=True,
+        )
+    await ctx.send(embed=embed, view=PetShopView(ctx.author, ctx.author.id))
+
+
+@bot.command()
+async def feed(ctx):
+    result = feed_pet(ctx.author.id)
+    if not result:
+        return await ctx.send("You don't have a pet yet. Use `!petshop` first.")
+    pet, leveled_up = result
+    save_data()
+    embed = discord.Embed(
+        title=f"Fed {pet['name']}",
+        description=f"Hunger is now **{pet['hunger']}/100**.",
+        color=discord.Color.green(),
+    )
+    embed.add_field(name="Pet Level", value=str(pet['level']), inline=True)
+    embed.add_field(name="Pet XP", value=str(pet['xp']), inline=True)
+    if leveled_up:
+        embed.add_field(name="Level Up!", value=f"{pet['name']} reached **Level {pet['level']}**!", inline=False)
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+async def petrename(ctx, *, new_name: str = None):
+    pet = sync_pet_state(ctx.author.id)
+    if not pet:
+        return await ctx.send("You don't have a pet yet.")
+    if not new_name:
+        return await ctx.send("Usage: `!petrename <new name>`")
+    cleaned = sanitize_pet_name(new_name)
+    if not cleaned:
+        return await ctx.send("Pet names must be 1-20 characters.")
+    if get_wallet(ctx.author.id) < PET_RENAME_COST:
+        return await ctx.send(f"You need **{format_coins(PET_RENAME_COST)}** coins to rename your pet.")
+    wallet[ctx.author.id] -= PET_RENAME_COST
+    pet['name'] = cleaned
+    save_data()
+    await ctx.send(f"Renamed your pet to **{cleaned}** for **{format_coins(PET_RENAME_COST)}** coins.")
+
+
+class CustomRodView(discord.ui.View):
+    def __init__(self, requester, user_id: int):
+        super().__init__(timeout=120)
+        self.requester = requester
+        self.user_id = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester.id:
+            await interaction.response.send_message("This isn't your custom rod menu.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Rod", style=discord.ButtonStyle.primary, emoji="??")
+    async def custom_rod_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        entry = get_custom_rod_entry(self.user_id)
+
+        if not entry.get("unlocked"):
+            if get_wallet(self.user_id) < CUSTOM_ROD_UNLOCK_COST:
+                await interaction.response.send_message(
+                    f"You need **{format_coins(CUSTOM_ROD_UNLOCK_COST)}** coins to unlock your custom rod.",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.send_message(
+                "Check the channel and send your custom rod name within 60 seconds. Max 20 characters.",
+                ephemeral=True,
+            )
+            name_input = await prompt_for_author_message(
+                interaction.channel,
+                interaction.user,
+                "Send your custom rod name now. Max 20 characters.",
+            )
+        else:
+            await interaction.response.send_message(
+                "Check the channel and send a new custom rod name, or type `skip` to just equip it.",
+                ephemeral=True,
+            )
+            name_input = await prompt_for_author_message(
+                interaction.channel,
+                interaction.user,
+                "Send a new custom rod name, or type `skip` to just equip it.",
+            )
+
+        if name_input is None:
+            await interaction.followup.send("Custom rod setup timed out.", ephemeral=True)
+            return
+
+        if name_input.lower() == "skip" and entry.get("unlocked"):
+            fishing_equipped_rod[self.user_id] = "Custom Rod"
+            save_data()
+            await interaction.followup.send(f"Equipped **{get_custom_rod_display_name(self.user_id)}**.", ephemeral=True)
+            return
+
+        cleaned = sanitize_custom_rod_name(name_input)
+        if not cleaned:
+            await interaction.followup.send("Custom rod names must be 1-20 characters.", ephemeral=True)
+            return
+
+        if not entry.get("unlocked"):
+            wallet[self.user_id] -= CUSTOM_ROD_UNLOCK_COST
+            entry["unlocked"] = True
+        elif cleaned != entry.get("name"):
+            if get_wallet(self.user_id) < CUSTOM_ROD_RENAME_COST:
+                await interaction.followup.send(
+                    f"You need **{format_coins(CUSTOM_ROD_RENAME_COST)}** coins to rename your custom rod.",
+                    ephemeral=True,
+                )
+                return
+            wallet[self.user_id] -= CUSTOM_ROD_RENAME_COST
+
+        entry["name"] = cleaned
+        fishing_equipped_rod[self.user_id] = "Custom Rod"
+        save_data()
+        await interaction.followup.send(f"Custom rod set to **{cleaned}** and equipped.", ephemeral=True)
+
+
+@bot.command()
+async def custom(ctx):
+    entry = get_custom_rod_entry(ctx.author.id)
+    unlocked = entry.get("unlocked")
+    base_name = get_best_owned_real_rod(ctx.author.id)
+    base_data = FISHING_RODS[base_name]
+    embed = discord.Embed(
+        title="Custom Rod",
+        description=(
+            f"**Status:** {'Unlocked' if unlocked else 'Locked'}\n"
+            f"**Best rod mirrored:** {base_name}\n"
+            f"**Current custom name:** {get_custom_rod_display_name(ctx.author.id)}\n\n"
+            f"Unlock: **{format_coins(CUSTOM_ROD_UNLOCK_COST)}** coins\n"
+            f"Rename: **{format_coins(CUSTOM_ROD_RENAME_COST)}** coins"
+        ),
+        color=discord.Color.purple(),
+    )
+    embed.add_field(
+        name="Mirrored Stats",
+        value=(
+            f"Reward x{base_data['reward_multiplier']}\n"
+            f"Reaction {base_data['reaction_time']}s"
+        ),
+        inline=False,
+    )
+    await ctx.send(embed=embed, view=CustomRodView(ctx.author, ctx.author.id))
+
+
+def build_company_embed(user_id: int, owner_name: str):
+    company = sync_company_income(user_id)
+    if not company:
+        return discord.Embed(
+            title="Company",
+            description="You don't own a company yet. Use `!company` to create one.",
+            color=discord.Color.orange(),
+        )
+
+    hourly_income = company_hourly_income(company['level'])
+    resource_name = company_resource_label(company)
+    embed = discord.Embed(
+        title=f"{company['name']}",
+        description=f"{owner_name}'s {company['concept']} company",
+        color=discord.Color.dark_teal(),
+    )
+    embed.add_field(name="Level", value=str(company['level']), inline=True)
+    embed.add_field(name="Hourly Income", value=f"{format_coins(hourly_income)} coins", inline=True)
+    embed.add_field(name="Stored Income", value=f"{format_coins(company['stored_income'])} coins", inline=True)
+    embed.add_field(name="Resource", value=f"{format_coins(company['resource'])} {resource_name}", inline=False)
+    embed.add_field(
+        name="Upgrade Cost",
+        value=f"{format_coins(company_upgrade_resource_cost(company['level']))} {resource_name}",
+        inline=False,
+    )
+    embed.add_field(
+        name="Resource Buy Cost",
+        value=f"{format_coins(company_resource_unit_cost(company['level']))} coins each",
+        inline=False,
+    )
+    embed.set_footer(text="Commands: !company buy <amount> ? !company upgrade ? !company collect")
+    return embed
+
+
+@bot.group(invoke_without_command=True)
+async def company(ctx):
+    user_id = ctx.author.id
+    current = get_company_record(user_id)
+    if current:
+        return await ctx.send(embed=build_company_embed(user_id, ctx.author.display_name))
+
+    name_input = await prompt_for_author_message(ctx.channel, ctx.author, "Send your company name. Max 24 characters.")
+    if name_input is None:
+        return await ctx.send("Company setup timed out.")
+    company_name = sanitize_company_name(name_input)
+    if not company_name:
+        return await ctx.send("Company names must be 1-24 characters.")
+
+    concept_input = await prompt_for_author_message(ctx.channel, ctx.author, "Now send your company concept as **one word**. Example: `Coffee`")
+    if concept_input is None:
+        return await ctx.send("Company setup timed out.")
+    concept = sanitize_company_concept(concept_input)
+    if not concept:
+        return await ctx.send("Concept must be one clean word, like `Coffee` or `Steel`.")
+
+    company_data[user_id] = {
+        "name": company_name,
+        "concept": concept,
+        "level": 1,
+        "resource": 0,
+        "stored_income": 0,
+        "last_tick": int(time.time()),
+    }
+    save_data()
+    await ctx.send(embed=build_company_embed(user_id, ctx.author.display_name))
+
+
+@company.command(name="buy")
+async def company_buy(ctx, amount: str = None):
+    company = get_company_record(ctx.author.id)
+    if not company:
+        return await ctx.send("Create your company first with `!company`.")
+    amount_value = parse_amount_input(amount, balance=10**12, allow_all=False)
+    if amount_value is None or amount_value <= 0:
+        return await ctx.send("Usage: `!company buy <amount>`")
+    unit_cost = company_resource_unit_cost(company['level'])
+    total_cost = unit_cost * amount_value
+    if get_wallet(ctx.author.id) < total_cost:
+        return await ctx.send(f"You need **{format_coins(total_cost)}** coins.")
+    wallet[ctx.author.id] -= total_cost
+    company['resource'] += amount_value
+    save_data()
+    await ctx.send(f"Bought **{format_coins(amount_value)} {company_resource_label(company)}** for **{format_coins(total_cost)}** coins.")
+
+
+@company.command(name="upgrade")
+async def company_upgrade(ctx):
+    company = get_company_record(ctx.author.id)
+    if not company:
+        return await ctx.send("Create your company first with `!company`.")
+    cost = company_upgrade_resource_cost(company['level'])
+    if company['resource'] < cost:
+        return await ctx.send(f"You need **{format_coins(cost)} {company_resource_label(company)}** to upgrade.")
+    company['resource'] -= cost
+    company['level'] += 1
+    save_data()
+    await ctx.send(f"Upgraded **{company['name']}** to **Level {company['level']}**. Hourly income is now **{format_coins(company_hourly_income(company['level']))}** coins.")
+
+
+@company.command(name="collect")
+async def company_collect(ctx):
+    company = sync_company_income(ctx.author.id)
+    if not company:
+        return await ctx.send("Create your company first with `!company`.")
+    stored = company.get('stored_income', 0)
+    if stored <= 0:
+        return await ctx.send("Your company has nothing ready to collect yet.")
+    payout = int(stored * pet_bonus_multiplier(ctx.author.id, 'company'))
+    wallet.setdefault(ctx.author.id, 0)
+    wallet[ctx.author.id] += payout
+    company['stored_income'] = 0
+    save_data()
+    await ctx.send(f"Collected **{format_coins(payout)}** coins from **{company['name']}**.")
 
 
 # ============== Owner Power =============
@@ -4023,7 +4612,7 @@ async def delivery(ctx):
         base_reward  = random.randint(*base_reward_range)
         speed_ratio  = max(0.0, 1.0 - (elapsed / time_limit))
         speed_bonus  = 1.0 + speed_ratio * 0.5          # up to +50 %
-        final_reward = int(base_reward * vdata["reward_multiplier"] * speed_bonus)
+        final_reward = int(base_reward * vdata["reward_multiplier"] * speed_bonus * pet_bonus_multiplier(user_id, "delivery"))
 
         wallet.setdefault(user_id, 0)
         wallet[user_id] += final_reward
