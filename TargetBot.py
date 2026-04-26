@@ -195,6 +195,13 @@ PET_SHOP = {
         "bonus_value": 0.15,
         "bonus_label": "+15% company, fishing, and delivery rewards",
     },
+    "Leviathan": {
+        "price": 100_000_000,
+        "emoji": "🐲",
+        "bonus_type": "legendary_fishing",
+        "bonus_value": 0.55,
+        "bonus_label": "+55% legendary fishing chance",
+    },
 }
 
 
@@ -374,6 +381,23 @@ def pet_bonus_multiplier(user_id: int, bonus_type: str) -> float:
 
     level_scale = 1.0 + ((pet.get("level", 1) - 1) * 0.01)
     hunger_scale = 0.6 + min(hunger, 100) / 250
+    return 1.0 + (pet_info["bonus_value"] * level_scale * hunger_scale)
+
+
+def pet_legendary_fishing_multiplier(user_id: int) -> float:
+    pet = sync_pet_state(user_id)
+    if not pet:
+        return 1.0
+
+    if pet.get("hunger", 0) <= 15:
+        return 1.0
+
+    pet_info = PET_SHOP.get(pet.get("type"))
+    if not pet_info or pet_info.get("bonus_type") != "legendary_fishing":
+        return 1.0
+
+    level_scale = 1.0 + ((pet.get("level", 1) - 1) * 0.012)
+    hunger_scale = 0.6 + min(pet.get("hunger", 100), 100) / 250
     return 1.0 + (pet_info["bonus_value"] * level_scale * hunger_scale)
 
 
@@ -568,6 +592,26 @@ def _legendary_multiplier(user_id: int, rod_name: str, hook_name: str = "Basic H
     hook_factor  = 1.0 + min(hook_data["legendary_bonus"], 4.0) * 0.45
     level_factor = 1.0 + min(gen_level, 50) * 0.02
     return min(rod_factor * hook_factor * level_factor, 7.5)
+
+
+def check_legendary_catch(user_id: int, rod_name: str, hook_name: str = "Basic Hook") -> str | None:
+    """Independent legendary roll kept rare even with late-game gear."""
+    mult = _legendary_multiplier(user_id, rod_name, hook_name) * pet_legendary_fishing_multiplier(user_id)
+
+    chances = {
+        "bloop": FISHING_CATCHES["bloop"]["base_chance"] * mult,
+        "mobydick": FISHING_CATCHES["mobydick"]["base_chance"] * mult,
+        "kraken": FISHING_CATCHES["kraken"]["base_chance"] * mult,
+        "spongebob": FISHING_CATCHES["spongebob"]["base_chance"],
+    }
+
+    roll = random.random()
+    cumulative = 0.0
+    for catch_key, chance in chances.items():
+        cumulative += chance
+        if roll < cumulative:
+            return catch_key
+    return None
 
 
 def legendary_reward(catch_key: str, rod_name: str, user_id: int) -> int:
@@ -2946,8 +2990,27 @@ class PetShopView(discord.ui.View):
             if interaction.user.id != self.requester.id:
                 await interaction.response.send_message("This isn't your pet shop.", ephemeral=True)
                 return
-            if get_pet_record(self.user_id):
-                await interaction.response.send_message("You already have a pet. One pet per user.", ephemeral=True)
+            current_pet = sync_pet_state(self.user_id)
+            if current_pet:
+                if current_pet.get("type") == pet_name:
+                    await interaction.response.send_message(
+                        f"You already have **{pet_name}** equipped as your pet.",
+                        ephemeral=True,
+                    )
+                    return
+                confirm_view = PetSwapConfirmView(self.requester, self.user_id, pet_name)
+                embed = discord.Embed(
+                    title="Change Pet?",
+                    description=(
+                        f"Are u sure u wanna change ur pet?\n"
+                        f"Level wont reset, just pet will change.\n\n"
+                        f"Current pet: **{current_pet['type']}**\n"
+                        f"New pet: **{pet_name}**\n"
+                        f"Cost: **{format_coins(PET_SHOP[pet_name]['price'])}** coins"
+                    ),
+                    color=discord.Color.orange(),
+                )
+                await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
                 return
             price = PET_SHOP[pet_name]["price"]
             if get_wallet(self.user_id) < price:
@@ -2971,6 +3034,54 @@ class PetShopView(discord.ui.View):
                 view=None,
             )
         return callback
+
+
+class PetSwapConfirmView(discord.ui.View):
+    def __init__(self, requester, user_id: int, new_pet_name: str):
+        super().__init__(timeout=30)
+        self.requester = requester
+        self.user_id = user_id
+        self.new_pet_name = new_pet_name
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester.id:
+            await interaction.response.send_message("This isn't your pet swap.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Yes, change pet", style=discord.ButtonStyle.danger)
+    async def confirm_swap(self, interaction: discord.Interaction, button: discord.ui.Button):
+        current_pet = sync_pet_state(self.user_id)
+        if not current_pet:
+            await interaction.response.edit_message(content="You don't have a pet anymore.", embed=None, view=None)
+            return
+
+        price = PET_SHOP[self.new_pet_name]["price"]
+        if get_wallet(self.user_id) < price:
+            await interaction.response.edit_message(
+                content=f"You need **{format_coins(price)}** coins to switch to **{self.new_pet_name}**.",
+                embed=None,
+                view=None,
+            )
+            return
+
+        wallet[self.user_id] -= price
+        current_pet["type"] = self.new_pet_name
+        current_pet["name"] = self.new_pet_name
+        save_data()
+
+        await interaction.response.edit_message(
+            content=(
+                f"Switched your pet to **{self.new_pet_name}**. "
+                f"Your pet level and progress stayed the same."
+            ),
+            embed=None,
+            view=None,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_swap(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Pet change cancelled.", embed=None, view=None)
 
 
 @bot.command()
@@ -3130,6 +3241,42 @@ class RenameView(discord.ui.View):
             ephemeral=True
         )
 
+    @discord.ui.button(label="🎣 Custom Rod", style=discord.ButtonStyle.success)
+    async def rename_custom_rod_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        entry = get_custom_rod_entry(self.user_id)
+        if not entry.get("unlocked"):
+            await interaction.response.send_message("You haven't unlocked a custom rod yet. Use `!custom` first.", ephemeral=True)
+            return
+        if get_wallet(self.user_id) < CUSTOM_ROD_RENAME_COST:
+            await interaction.response.send_message(
+                f"You need **{format_coins(CUSTOM_ROD_RENAME_COST)}** coins to rename your custom rod.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            "What do you want to call your custom rod? (Max 20 characters) — you have 60 seconds.",
+            ephemeral=True,
+        )
+        name_input = await prompt_for_author_message(
+            interaction.channel,
+            interaction.user,
+            "💬 Type your new **custom rod name** now (max 20 chars):",
+        )
+        if name_input is None:
+            await interaction.followup.send("Rename timed out.", ephemeral=True)
+            return
+        cleaned = sanitize_custom_rod_name(name_input)
+        if not cleaned:
+            await interaction.followup.send("Custom rod names must be 1-20 characters.", ephemeral=True)
+            return
+        wallet[self.user_id] -= CUSTOM_ROD_RENAME_COST
+        entry["name"] = cleaned
+        save_data()
+        await interaction.followup.send(
+            f"✅ Your custom rod is now called **{cleaned}**! (**{format_coins(CUSTOM_ROD_RENAME_COST)}** coins deducted)",
+            ephemeral=True,
+        )
+
 
 @bot.command()
 async def rename(ctx):
@@ -3252,7 +3399,7 @@ async def custom(ctx):
     await ctx.send(embed=embed, view=CustomRodView(ctx.author, ctx.author.id))
 
 
-COMPANY_BUY_AMOUNTS = [1, 5, 10, 25, 50]
+COMPANY_BUY_AMOUNTS = [1, 5, 10, 25, 50, 100, 250, 500, 1000]
 COMPANY_UPGRADE_AMOUNTS = [1, 3, 5, 10]
 
 
@@ -3375,12 +3522,12 @@ class CompanyPanelView(discord.ui.View):
                 button = discord.ui.Button(
                     label=f"x{qty}",
                     style=discord.ButtonStyle.success if self.selected_amount == qty else discord.ButtonStyle.secondary,
-                    row=1,
+                    row=1 + (index // 5),
                 )
                 button.callback = self._amount_callback(qty)
                 self.add_item(button)
 
-            confirm = discord.ui.Button(label=f"Buy x{self.selected_amount}", style=discord.ButtonStyle.primary, row=2)
+            confirm = discord.ui.Button(label=f"Buy x{self.selected_amount}", style=discord.ButtonStyle.primary, row=3)
             confirm.callback = self._confirm_buy
             self.add_item(confirm)
 
@@ -3395,12 +3542,12 @@ class CompanyPanelView(discord.ui.View):
                 button = discord.ui.Button(
                     label=f"x{qty}",
                     style=discord.ButtonStyle.success if selected else discord.ButtonStyle.secondary,
-                    row=1,
+                    row=1 + (index // 5),
                 )
                 button.callback = self._amount_callback(compare_value)
                 self.add_item(button)
 
-            confirm = discord.ui.Button(label=f"Upgrade x{self.selected_amount}", style=discord.ButtonStyle.success, row=2)
+            confirm = discord.ui.Button(label=f"Upgrade x{self.selected_amount}", style=discord.ButtonStyle.success, row=3)
             confirm.callback = self._confirm_upgrade
             self.add_item(confirm)
 
@@ -5880,8 +6027,3 @@ async def check_blacklist(ctx):
 # =========== TOKEN ==============
 
 bot.run(os.environ.get("TOKEN"))
-
-
-
-
-
