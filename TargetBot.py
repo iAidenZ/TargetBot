@@ -134,6 +134,13 @@ FISHING_CATCHES = {
     "spongebob":{"emoji": "🧽", "name": "SpongeBob", "base_reward": 1_000_000,  "base_chance": 0.0015,  "scales_level": False, "fixed_reward": True},
 }
 
+LEGENDARY_FISH_IMAGES = {
+    "kraken": "https://www.dndbeyond.com/avatars/thumbnails/47139/23/1000/1000/638741964337775307.png",
+    "bloop": "https://static.wikia.nocookie.net/kaijuverse/images/4/41/Bloop.png/revision/latest?cb=20250601143043.png",
+    "mobydick": "https://img.goodfon.com/original/1920x1080/2/a1/kit-more-pryzhok-volny-tsifrovoe-iskusstvo-ii-art-iskusstvo.jpg",
+    "spongebob": "https://i.pinimg.com/736x/8a/c3/0b/8ac30bf6b07352685925ddc81d06f108.jpg",
+}
+
 # ── Fishing hooks ────────────────────────────────────────────────────────────
 FISHING_HOOKS = {
     "Basic Hook":   {"price": 0,       "level_req": 0,  "emoji": "🪝", "rare_bonus": 0,  "shark_bonus": 0,  "legendary_bonus": 0.0},
@@ -2907,8 +2914,6 @@ async def fish(ctx):
 
             if legendary_key:
                 # ── Per-fish special embeds ──────────────────────────────
-                legendary_file = None
-
                 if legendary_key == "mobydick":
                     result_embed = discord.Embed(
                         title="🐋 YOU CAUGHT IT FINALLY...",
@@ -2922,12 +2927,6 @@ async def fish(ctx):
                         ),
                         color=discord.Color.from_rgb(30, 60, 120)
                     )
-                    try:
-                        legendary_file = discord.File("/home/claude/mobydick.png", filename="mobydick.png")
-                        result_embed.set_image(url="attachment://mobydick.png")
-                    except Exception:
-                        pass
-
                 elif legendary_key == "kraken":
                     result_embed = discord.Embed(
                         title="🦑 THE KRAKEN AWAKENS...",
@@ -2941,12 +2940,6 @@ async def fish(ctx):
                         ),
                         color=discord.Color.from_rgb(15, 25, 50)
                     )
-                    try:
-                        legendary_file = discord.File("/home/claude/kraken.png", filename="kraken.png")
-                        result_embed.set_image(url="attachment://kraken.png")
-                    except Exception:
-                        pass
-
                 elif legendary_key == "bloop":
                     result_embed = discord.Embed(
                         title="🌊 SOMETHING IS RISING...",
@@ -2960,12 +2953,6 @@ async def fish(ctx):
                         ),
                         color=discord.Color.from_rgb(10, 60, 70)
                     )
-                    try:
-                        legendary_file = discord.File("/home/claude/bloop.png", filename="bloop.png")
-                        result_embed.set_image(url="attachment://bloop.png")
-                    except Exception:
-                        pass
-
                 elif legendary_key == "spongebob":
                     result_embed = discord.Embed(
                         title=f"🧽 WAIT... IS THAT?!",
@@ -2991,6 +2978,10 @@ async def fish(ctx):
                         ),
                         color=discord.Color.gold()
                     )
+
+                image_url = LEGENDARY_FISH_IMAGES.get(legendary_key, "").strip()
+                if image_url:
+                    result_embed.set_image(url=image_url)
 
             else:
                 result_embed = discord.Embed(
@@ -3028,11 +3019,7 @@ async def fish(ctx):
             result_embed.add_field(name="Rod", value=rod_display_name, inline=True)
 
         result_embed.set_footer(text=f"Wallet: {format_coins(get_wallet(user_id))} coins")
-        if legendary_key and legendary_file:
-            await game_message.delete()
-            await ctx.send(embed=result_embed, file=legendary_file)
-        else:
-            await game_message.edit(embed=result_embed)
+        await game_message.edit(embed=result_embed)
 
     finally:
         fishing_active.discard(user_id)
