@@ -140,7 +140,7 @@ FISHING_HOOKS = {
     "Iron Hook":    {"price": 5_000,   "level_req": 3,  "emoji": "⚙️", "rare_bonus": 5,  "shark_bonus": 1,  "legendary_bonus": 0.0},
     "Golden Hook":  {"price": 50_000,  "level_req": 10, "emoji": "🥇", "rare_bonus": 12, "shark_bonus": 3,  "legendary_bonus": 0.25},
     "Diamond Hook": {"price": 500_000, "level_req": 25, "emoji": "💎", "rare_bonus": 20, "shark_bonus": 6,  "legendary_bonus": 0.75},
-    "Abyssal Hook": {"price": 25_000_000, "level_req": 45, "emoji": "🌌", "rare_bonus": 42, "shark_bonus": 18, "legendary_bonus": 3.6},
+    "Abyssal Hook": {"price": 25_000_000, "level_req": 45, "emoji": "🌌", "rare_bonus": 80, "shark_bonus": 40, "legendary_bonus": 8.0},
 }
 
 # ── Fishing bait ─────────────────────────────────────────────────────────────
@@ -434,7 +434,9 @@ def company_resource_label(company: dict) -> str:
 
 
 def company_hourly_income(level: int) -> int:
-    return int(350 * (level ** 1.35))
+    # Early: modest, Mid: ramps up, Late: significant
+    # Lv1≈350, Lv10≈12k, Lv25≈80k, Lv50≈500k, Lv100≈4M
+    return int(350 * (level ** 1.75))
 
 
 def company_resource_unit_cost(level: int) -> int:
@@ -567,19 +569,44 @@ def build_fishing_grid(catch_position):
     ])
 
 
-def choose_fish_catch(rod_name: str, hook_name: str = "Basic Hook"):
+def choose_fish_catch(rod_name: str, hook_name: str = "Basic Hook", user_id: int = None):
     rod_data  = FISHING_RODS[rod_name]
     hook_data = FISHING_HOOKS[hook_name]
-    boot_weight  = 8
-    rare_weight  = 20 + rod_data["rare_bonus"]  + hook_data["rare_bonus"]
-    shark_weight = 2  + rod_data["shark_bonus"] + hook_data["shark_bonus"]
-    small_weight = max(1, 100 - boot_weight - rare_weight - shark_weight)
 
-    return random.choices(
-        ["small", "rare", "shark", "boot"],
-        weights=[small_weight, rare_weight, shark_weight, boot_weight],
-        k=1,
-    )[0]
+    total_rare_bonus  = rod_data["rare_bonus"]  + hook_data["rare_bonus"]
+    total_shark_bonus = rod_data["shark_bonus"] + hook_data["shark_bonus"]
+
+    # Cat pet boosts rare/legendary weighting
+    cat_bonus = 0
+    if user_id is not None:
+        pet = sync_pet_state(user_id)
+        if pet and pet.get("hunger", 0) > 15:
+            info = PET_SHOP.get(pet.get("type", ""))
+            if info and info.get("bonus_type") == "fishing":
+                cat_bonus = int(pet.get("level", 1) * 1.5)
+
+    total_rare_bonus  += cat_bonus
+    total_shark_bonus += cat_bonus // 2
+
+    boot_weight  = max(0, 8  - (total_rare_bonus // 8))    # Boot fades as gear improves
+    rare_weight  = 20 + total_rare_bonus
+    shark_weight = 2  + total_shark_bonus
+    small_weight = max(0, 100 - boot_weight - rare_weight - shark_weight)
+
+    # Maxed gear floor: if boot+small would dominate, guarantee at least rare
+    if total_rare_bonus >= 50 and small_weight > 0:
+        small_weight = 0
+    if total_rare_bonus >= 80:
+        boot_weight = 0
+
+    choices = ["small", "rare", "shark", "boot"]
+    weights = [small_weight, rare_weight, shark_weight, boot_weight]
+
+    # Filter out zero-weight options
+    valid = [(c, w) for c, w in zip(choices, weights) if w > 0]
+    choices, weights = zip(*valid)
+
+    return random.choices(list(choices), weights=list(weights), k=1)[0]
 
 
 def _legendary_multiplier(user_id: int, rod_name: str, hook_name: str = "Basic Hook") -> float:
@@ -2826,7 +2853,7 @@ async def fish(ctx):
                 catch = FISHING_CATCHES[catch_key]
                 reward = legendary_reward(catch_key, base_rod_name, user_id)
             else:
-                catch_key = choose_fish_catch(base_rod_name, equipped_hook)
+                catch_key = choose_fish_catch(base_rod_name, equipped_hook, user_id)
                 catch = FISHING_CATCHES[catch_key]
                 reward = int(catch["reward"] * rod_data["reward_multiplier"])
 
@@ -2846,17 +2873,92 @@ async def fish(ctx):
             )
 
             if legendary_key:
-                result_embed = discord.Embed(
-                    title=f"🌟 LEGENDARY CATCH! {catch['emoji']} {catch['name']}!",
-                    description=(
-                        f"{grid}\n\n"
-                        f"⚠️ You pulled up a **{catch['name']}** from the depths!\n\n"
-                        f"**+{format_coins(reward)} coins**\n"
-                        f"**+{gen_xp_gain} General XP**\n"
-                        f"{bait_line}"
-                    ),
-                    color=discord.Color.gold()
-                )
+                # ── Per-fish special embeds ──────────────────────────────
+                legendary_file = None
+
+                if legendary_key == "mobydick":
+                    result_embed = discord.Embed(
+                        title="🐋 YOU CAUGHT IT FINALLY...",
+                        description=(
+                            "*The sea trembles. The storm roars. The legend surfaces.*\n\n"
+                            "**The legendary Monster of the sea...**\n"
+                            "# 🌊 MOBY DICK 🌊\n\n"
+                            f"**+{format_coins(reward)} coins**\n"
+                            f"**+{gen_xp_gain} General XP**\n"
+                            f"{bait_line}"
+                        ),
+                        color=discord.Color.from_rgb(30, 60, 120)
+                    )
+                    try:
+                        legendary_file = discord.File("/home/claude/mobydick.png", filename="mobydick.png")
+                        result_embed.set_image(url="attachment://mobydick.png")
+                    except Exception:
+                        pass
+
+                elif legendary_key == "kraken":
+                    result_embed = discord.Embed(
+                        title="🦑 THE KRAKEN AWAKENS...",
+                        description=(
+                            "*The nets shred. The boat tilts. Something ancient surfaces.*\n\n"
+                            "**From the darkest depths of the abyss...**\n"
+                            "# 🌊 THE KRAKEN 🌊\n\n"
+                            f"**+{format_coins(reward)} coins**\n"
+                            f"**+{gen_xp_gain} General XP**\n"
+                            f"{bait_line}"
+                        ),
+                        color=discord.Color.from_rgb(15, 25, 50)
+                    )
+                    try:
+                        legendary_file = discord.File("/home/claude/kraken.png", filename="kraken.png")
+                        result_embed.set_image(url="attachment://kraken.png")
+                    except Exception:
+                        pass
+
+                elif legendary_key == "bloop":
+                    result_embed = discord.Embed(
+                        title="🌊 SOMETHING IS RISING...",
+                        description=(
+                            "*The ocean goes silent. The water spirals. A jaw opens from below.*\n\n"
+                            "**The unidentified horror of the deep...**\n"
+                            "# 🦷 THE BLOOP 🦷\n\n"
+                            f"**+{format_coins(reward)} coins**\n"
+                            f"**+{gen_xp_gain} General XP**\n"
+                            f"{bait_line}"
+                        ),
+                        color=discord.Color.from_rgb(10, 60, 70)
+                    )
+                    try:
+                        legendary_file = discord.File("/home/claude/bloop.png", filename="bloop.png")
+                        result_embed.set_image(url="attachment://bloop.png")
+                    except Exception:
+                        pass
+
+                elif legendary_key == "spongebob":
+                    result_embed = discord.Embed(
+                        title=f"🧽 WAIT... IS THAT?!",
+                        description=(
+                            f"{grid}\n\n"
+                            f"🍍 Are you ready kids?! You somehow caught **SpongeBob**?!\n\n"
+                            f"**+{format_coins(reward)} coins**\n"
+                            f"**+{gen_xp_gain} General XP**\n"
+                            f"{bait_line}"
+                        ),
+                        color=discord.Color.yellow()
+                    )
+
+                else:
+                    result_embed = discord.Embed(
+                        title=f"🌟 LEGENDARY CATCH! {catch['emoji']} {catch['name']}!",
+                        description=(
+                            f"{grid}\n\n"
+                            f"⚠️ You pulled up a **{catch['name']}** from the depths!\n\n"
+                            f"**+{format_coins(reward)} coins**\n"
+                            f"**+{gen_xp_gain} General XP**\n"
+                            f"{bait_line}"
+                        ),
+                        color=discord.Color.gold()
+                    )
+
             else:
                 result_embed = discord.Embed(
                     title=f"{catch['emoji']} You got a {catch['name']}!",
@@ -2893,7 +2995,11 @@ async def fish(ctx):
             result_embed.add_field(name="Rod", value=rod_display_name, inline=True)
 
         result_embed.set_footer(text=f"Wallet: {format_coins(get_wallet(user_id))} coins")
-        await game_message.edit(embed=result_embed)
+        if legendary_key and legendary_file:
+            await game_message.delete()
+            await ctx.send(embed=result_embed, file=legendary_file)
+        else:
+            await game_message.edit(embed=result_embed)
 
     finally:
         fishing_active.discard(user_id)
@@ -3084,9 +3190,58 @@ class PetSwapConfirmView(discord.ui.View):
         await interaction.response.edit_message(content="Pet change cancelled.", embed=None, view=None)
 
 
+class PetView(discord.ui.View):
+    """Buttons shown on the !pet embed."""
+    def __init__(self, requester, user_id: int):
+        super().__init__(timeout=120)
+        self.requester = requester
+        self.user_id   = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester.id:
+            await interaction.response.send_message("This isn't your pet panel.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="🍖 Feed", style=discord.ButtonStyle.success)
+    async def feed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        result = feed_pet(self.user_id)
+        if not result:
+            await interaction.response.send_message("You don't have a pet yet.", ephemeral=True)
+            return
+        pet, leveled_up = result
+        save_data()
+        msg = f"Fed **{pet['name']}**! Hunger: **{pet['hunger']}/100**"
+        if leveled_up:
+            msg += f"\n🎉 **{pet['name']}** levelled up to **Level {pet['level']}**!"
+        await interaction.response.edit_message(
+            embed=build_pet_embed(self.user_id, interaction.user.display_name),
+            content=msg,
+            view=self,
+        )
+
+    @discord.ui.button(label="🛒 Pet Shop", style=discord.ButtonStyle.primary)
+    async def shop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="Pet Shop",
+            description="Adopt one pet. Pets give passive bonuses while they stay fed.",
+            color=discord.Color.blurple(),
+        )
+        for pet_name, pet_info in PET_SHOP.items():
+            embed.add_field(
+                name=f"{pet_info['emoji']} {pet_name}",
+                value=f"Price: {format_coins(pet_info['price'])} coins\n{pet_info['bonus_label']}",
+                inline=True,
+            )
+        await interaction.response.send_message(embed=embed, view=PetShopView(self.requester, self.user_id), ephemeral=True)
+
+
 @bot.command()
 async def pet(ctx):
-    await ctx.send(embed=build_pet_embed(ctx.author.id, ctx.author.display_name))
+    await ctx.send(
+        embed=build_pet_embed(ctx.author.id, ctx.author.display_name),
+        view=PetView(ctx.author, ctx.author.id),
+    )
 
 
 @bot.command()
@@ -3518,13 +3673,20 @@ class CompanyPanelView(discord.ui.View):
             self.add_item(button)
 
         if self.selected_mode == "buy":
-            for index, qty in enumerate(COMPANY_BUY_AMOUNTS):
+            company = get_company_record(self.user_id)
+            unit_cost = company_resource_unit_cost(company["level"]) if company else 1
+            max_buyable = max(1, get_wallet(self.user_id) // unit_cost) if unit_cost > 0 else 1
+
+            buy_options = COMPANY_BUY_AMOUNTS + ["Max"]
+            for index, qty in enumerate(buy_options):
+                compare_val = max_buyable if qty == "Max" else qty
+                selected = self.selected_amount == compare_val
                 button = discord.ui.Button(
-                    label=f"x{qty}",
-                    style=discord.ButtonStyle.success if self.selected_amount == qty else discord.ButtonStyle.secondary,
+                    label=f"x{qty}" if qty != "Max" else f"Max (x{max_buyable})",
+                    style=discord.ButtonStyle.success if selected else discord.ButtonStyle.secondary,
                     row=1 + (index // 5),
                 )
-                button.callback = self._amount_callback(qty)
+                button.callback = self._amount_callback(compare_val)
                 self.add_item(button)
 
             confirm = discord.ui.Button(label=f"Buy x{self.selected_amount}", style=discord.ButtonStyle.primary, row=3)
