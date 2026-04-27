@@ -625,6 +625,11 @@ def check_legendary_catch(user_id: int, rod_name: str, hook_name: str = "Basic H
     """Independent legendary roll kept rare even with late-game gear."""
     mult = _legendary_multiplier(user_id, rod_name, hook_name) * pet_legendary_fishing_multiplier(user_id)
 
+
+    if rod_name.lower() == "unbelievable" and hook_name.lower() == "abyssal":
+        mult *= 10   # big boost (adjust if needed)
+
+
     chances = {
         "bloop": FISHING_CATCHES["bloop"]["base_chance"] * mult,
         "mobydick": FISHING_CATCHES["mobydick"]["base_chance"] * mult,
