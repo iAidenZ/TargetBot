@@ -579,7 +579,7 @@ def get_fishing_progress_score(user_id: int | None, rod_name: str, hook_name: st
     score = (rod_progress * 0.45) + (hook_progress * 0.35)
 
     if user_id is not None:
-        fishing_lvl = min(get_fishing_level(user_id), 50) / 50
+        fishing_lvl = min(get_fishing_level_value(user_id), 50) / 50
         score += fishing_lvl * 0.10
 
         pet = sync_pet_state(user_id)
