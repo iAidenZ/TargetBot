@@ -569,81 +569,109 @@ def build_fishing_grid(catch_position):
     ])
 
 
-def choose_fish_catch(rod_name: str, hook_name: str = "Basic Hook", user_id: int = None):
-    rod_data  = FISHING_RODS[rod_name]
-    hook_data = FISHING_HOOKS[hook_name]
+def get_fishing_progress_score(user_id: int | None, rod_name: str, hook_name: str = "Basic Hook") -> float:
+    rod_names = list(FISHING_RODS.keys())
+    hook_names = list(FISHING_HOOKS.keys())
 
-    total_rare_bonus  = rod_data["rare_bonus"]  + hook_data["rare_bonus"]
-    total_shark_bonus = rod_data["shark_bonus"] + hook_data["shark_bonus"]
+    rod_progress = rod_names.index(rod_name) / max(1, len(rod_names) - 1)
+    hook_progress = hook_names.index(hook_name) / max(1, len(hook_names) - 1)
 
-    # Cat pet boosts rare/legendary weighting
-    cat_bonus = 0
+    score = (rod_progress * 0.45) + (hook_progress * 0.35)
+
     if user_id is not None:
+        fishing_lvl = min(get_fishing_level(user_id), 50) / 50
+        score += fishing_lvl * 0.10
+
         pet = sync_pet_state(user_id)
         if pet and pet.get("hunger", 0) > 15:
-            info = PET_SHOP.get(pet.get("type", ""))
-            if info and info.get("bonus_type") == "fishing":
-                cat_bonus = int(pet.get("level", 1) * 1.5)
+            pet_info = PET_SHOP.get(pet.get("type", ""))
+            if pet_info:
+                if pet_info.get("bonus_type") == "fishing":
+                    score += 0.04 + min(pet.get("level", 1), 50) * 0.0012
+                elif pet_info.get("bonus_type") == "legendary_fishing":
+                    score += 0.10 + min(pet.get("level", 1), 50) * 0.002
 
-    total_rare_bonus  += cat_bonus
-    total_shark_bonus += cat_bonus // 2
+    return max(0.0, min(score, 1.0))
 
-    boot_weight  = max(0, 8  - (total_rare_bonus // 8))    # Boot fades as gear improves
-    rare_weight  = 20 + total_rare_bonus
-    shark_weight = 2  + total_shark_bonus
-    small_weight = max(0, 100 - boot_weight - rare_weight - shark_weight)
 
-    # Maxed gear floor: if boot+small would dominate, guarantee at least rare
-    if total_rare_bonus >= 50 and small_weight > 0:
-        small_weight = 0
-    if total_rare_bonus >= 80:
-        boot_weight = 0
+def get_fishing_drop_profile(user_id: int | None, rod_name: str, hook_name: str = "Basic Hook") -> dict[str, float]:
+    progress = get_fishing_progress_score(user_id, rod_name, hook_name)
 
-    choices = ["small", "rare", "shark", "boot"]
-    weights = [small_weight, rare_weight, shark_weight, boot_weight]
+    legendary = 0.0015 + (0.0985 * (progress ** 1.35))
+    rare = 0.20
+    shark = 0.02 + (0.68 * (progress ** 1.05))
+    boot = 0.08 * ((1.0 - progress) ** 2.2)
 
-    # Filter out zero-weight options
-    valid = [(c, w) for c, w in zip(choices, weights) if w > 0]
+    remaining = max(0.0, 1.0 - legendary)
+
+    if rare + shark + boot > remaining:
+        overflow = (rare + shark + boot) - remaining
+        small = 0.0
+        shark = max(0.0, shark - overflow)
+    else:
+        small = remaining - (rare + shark + boot)
+
+    if progress >= 0.98:
+        rare = 0.20
+        shark = 0.70
+        legendary = 0.10
+        boot = 0.0
+        small = 0.0
+
+    return {
+        "small": small,
+        "rare": rare,
+        "shark": shark,
+        "boot": boot,
+        "legendary": legendary,
+    }
+
+
+def choose_fish_catch(rod_name: str, hook_name: str = "Basic Hook", user_id: int = None):
+    profile = get_fishing_drop_profile(user_id, rod_name, hook_name)
+    valid = [(name, weight) for name, weight in (
+        ("small", profile["small"]),
+        ("rare", profile["rare"]),
+        ("shark", profile["shark"]),
+        ("boot", profile["boot"]),
+    ) if weight > 0]
+
     choices, weights = zip(*valid)
-
     return random.choices(list(choices), weights=list(weights), k=1)[0]
 
 
 def _legendary_multiplier(user_id: int, rod_name: str, hook_name: str = "Basic Hook") -> float:
-    """Scale legendary chance on rod + hook + general level. No fishing level."""
-    rod_data  = FISHING_RODS[rod_name]
-    hook_data = FISHING_HOOKS[hook_name]
-    gen_level = get_general_level(user_id)
-
-    rod_factor   = 1.0 + min(rod_data["rare_bonus"], 40) * 0.02
-    hook_factor  = 1.0 + min(hook_data["legendary_bonus"], 4.0) * 0.45
-    level_factor = 1.0 + min(gen_level, 50) * 0.02
-    return min(rod_factor * hook_factor * level_factor, 7.5)
+    """Compatibility helper for reward scaling and older callers."""
+    profile = get_fishing_drop_profile(user_id, rod_name, hook_name)
+    base_total = (
+        FISHING_CATCHES["kraken"]["base_chance"]
+        + FISHING_CATCHES["bloop"]["base_chance"]
+        + FISHING_CATCHES["mobydick"]["base_chance"]
+        + FISHING_CATCHES["spongebob"]["base_chance"]
+    )
+    if base_total <= 0:
+        return 1.0
+    return max(1.0, profile["legendary"] / base_total)
 
 
 def check_legendary_catch(user_id: int, rod_name: str, hook_name: str = "Basic Hook") -> str | None:
-    """Independent legendary roll kept rare even with late-game gear."""
-    mult = _legendary_multiplier(user_id, rod_name, hook_name) * pet_legendary_fishing_multiplier(user_id)
+    """Roll legendary fish using the profile target for the user's setup."""
+    profile = get_fishing_drop_profile(user_id, rod_name, hook_name)
+    legendary_chance = profile["legendary"]
 
+    if random.random() >= legendary_chance:
+        return None
 
-    if rod_name.lower() == "unbelievable" and hook_name.lower() == "abyssal":
-        mult *= 10   # big boost (adjust if needed)
-
-
-    chances = {
-        "bloop": FISHING_CATCHES["bloop"]["base_chance"] * mult,
-        "mobydick": FISHING_CATCHES["mobydick"]["base_chance"] * mult,
-        "kraken": FISHING_CATCHES["kraken"]["base_chance"] * mult,
+    weighted_legendaries = {
+        "kraken": FISHING_CATCHES["kraken"]["base_chance"],
+        "bloop": FISHING_CATCHES["bloop"]["base_chance"],
+        "mobydick": FISHING_CATCHES["mobydick"]["base_chance"],
         "spongebob": FISHING_CATCHES["spongebob"]["base_chance"],
     }
 
-    roll = random.random()
-    cumulative = 0.0
-    for catch_key, chance in chances.items():
-        cumulative += chance
-        if roll < cumulative:
-            return catch_key
-    return None
+    catches = list(weighted_legendaries.keys())
+    weights = list(weighted_legendaries.values())
+    return random.choices(catches, weights=weights, k=1)[0]
 
 
 def legendary_reward(catch_key: str, rod_name: str, user_id: int) -> int:
