@@ -1,5 +1,4 @@
 discord.py[voice]
 PyNaCl
-git+https://github.com/yt-dlp/yt-dlp.git
 requests
-wavelink
+wavelink>=3.0.0
