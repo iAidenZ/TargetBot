@@ -11,10 +11,11 @@ import base64
 import tempfile
 from urllib.parse import quote_plus, urlparse
 from functools import partial
-import yt_dlp
 from decimal import Decimal, InvalidOperation
 from html import unescape as html_unescape
 from difflib import SequenceMatcher
+import wavelink    
+import aiohttp
 
 DATA_FILE = "/app/data/data.json"
 
@@ -930,303 +931,694 @@ def normalize_music_query(query):
 
     return f"scsearch1:{query}"
 
-# ===== MUSIC CLASS =====
+# ============ LAVALINK / WAVELINK MUSIC SYSTEM ============
 
-class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
-        super().__init__(source, volume)
-        self.data = data
-        self.title = data.get("title", "Unknown title")
-        self.webpage_url = data.get("webpage_url")
-        self.artist = data.get("artist") or data.get("uploader") or "Unknown artist"
-        self.track = data.get("track") or data.get("alt_title") or self.title
-        self.duration = data.get("duration")
-        self.thumbnail = data.get("thumbnail")
+import wavelink
 
-    @classmethod
-    async def from_url(cls, url, *, loop=None, stream=True):
-        loop = loop or asyncio.get_running_loop()
+# ── Lavalink node configuration ────────────────────────────────────────────
+LAVALINK_HOST = os.environ.get("LAVALINK_HOST", "127.0.0.1")
+LAVALINK_PORT = int(os.environ.get("LAVALINK_PORT", 2333))
+LAVALINK_PASSWORD = os.environ.get("LAVALINK_PASSWORD", "youshallnotpass")
+LAVALINK_SECURE = os.environ.get("LAVALINK_SECURE", "false").lower() == "true"
 
-        data = await loop.run_in_executor(
-            None,
-            partial(ytdl.extract_info, url, download=not stream)
-        )
+# ── Music state globals ─────────────────────────────────────────────────────
+music_queues = {}
+music_now_playing = {}
+music_text_channels = {}
+music_control_messages = {}
+music_autoplay = {}
+music_loop_mode = {}
+music_locks = {}
+music_starting = set()
+music_idle_tasks = {}
+recent_play_requests = {}
 
-        if "entries" in data:
-            entries = [entry for entry in data["entries"] if entry]
-            if not entries:
-                raise ValueError("No results found.")
-            data = entries[0]
 
-        filename = data["url"] if stream else ytdl.prepare_filename(data)
-        source = discord.FFmpegPCMAudio(
-            filename,
-            before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-            options="-vn",
-        )
-
-        return cls(source, data=data)
-
+class MusicPlayer(wavelink.Player):
+    """Custom Lavalink player with autoplay, loop, and queue management."""
     
-# ===== LYRICS SYSTEM =====
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.autoplay = False
+        self.loop_mode = "off"
+        self.text_channel = None
 
-import requests
-import re
+
+async def connect_lavalink():
+    """Connect bot to Lavalink node on startup."""
+    node = wavelink.Node(
+        uri=f"{'wss' if LAVALINK_SECURE else 'ws'}://{LAVALINK_HOST}:{LAVALINK_PORT}",
+        password=LAVALINK_PASSWORD,
+    )
+    await wavelink.Pool.connect(client=bot, nodes=[node])
+    print(f"Connected to Lavalink at {LAVALINK_HOST}:{LAVALINK_PORT}")
+
+
+# ── Override on_ready to connect Lavalink ──────────────────────────────────
+@bot.event
+async def on_ready():
+    load_data()
+    await connect_lavalink()
+    print(f"Logged in as {bot.user}")
+
+
+@bot.event
+async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload):
+    """Handle track ending: loop, autoplay, or next in queue."""
+    player = payload.player
+    if not isinstance(player, MusicPlayer):
+        return
+    
+    guild_id = player.guild.id
+    
+    # Track loop
+    if player.loop_mode == "track" and payload.track:
+        await player.play(payload.track)
+        return
+    
+    # Queue loop
+    if player.loop_mode == "queue" and payload.track:
+        await player.queue.put_wait(payload.track)
+    
+    # Autoplay
+    if player.autoplay and player.queue.is_empty:
+        try:
+            similar = await payload.track.fetch_recommendations()
+            if similar:
+                await player.play(similar[0])
+                music_now_playing[guild_id] = similar[0]
+                if guild_id in music_control_messages:
+                    try:
+                        msg = music_control_messages[guild_id]
+                        view = MusicControlView(guild_id)
+                        await msg.edit(embed=build_music_embed(similar[0], player), view=view)
+                        view.message = msg
+                    except Exception:
+                        pass
+                return
+        except Exception:
+            pass
+    
+    # Next in queue
+    if not player.queue.is_empty:
+        next_track = player.queue.get()
+        await player.play(next_track)
+        music_now_playing[guild_id] = next_track
+        if guild_id in music_control_messages:
+            try:
+                msg = music_control_messages[guild_id]
+                view = MusicControlView(guild_id)
+                await msg.edit(embed=build_music_embed(next_track, player), view=view)
+                view.message = msg
+            except Exception:
+                pass
+    else:
+        music_now_playing[guild_id] = None
+        if player.text_channel:
+            await schedule_music_idle_disconnect(player.guild, player.text_channel)
+
+
+async def ensure_voice(ctx) -> MusicPlayer | None:
+    """Ensure bot is in user's voice channel."""
+    if ctx.author.voice is None or ctx.author.voice.channel is None:
+        await ctx.send("Join a voice channel first.")
+        return None
+    
+    player = ctx.voice_client
+    target = ctx.author.voice.channel
+    
+    if player is None:
+        try:
+            player = await target.connect(cls=MusicPlayer)
+        except Exception as e:
+            await ctx.send(f"Couldn't join voice channel: `{e}`")
+            return None
+    elif player.channel != target:
+        await player.move_to(target)
+    
+    player.text_channel = ctx.channel
+    music_text_channels[ctx.guild.id] = ctx.channel
+    return player
+
+
+def format_duration(ms: int | None) -> str:
+    """Format milliseconds to readable string."""
+    if not ms:
+        return "Live"
+    seconds = ms // 1000
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def build_music_embed(track: wavelink.Playable, player: MusicPlayer | None = None) -> discord.Embed:
+    """Build rich now-playing embed."""
+    paused = player.paused if player else False
+    title = "⏸️ Paused" if paused else "🎶 Now Playing"
+    
+    embed = discord.Embed(
+        title=title,
+        description=f"**[{track.title}]({track.uri})**",
+        color=discord.Color.blurple(),
+    )
+    
+    author = track.author or "Unknown Artist"
+    embed.add_field(name="Artist", value=author, inline=True)
+    embed.add_field(name="Duration", value=format_duration(track.length), inline=True)
+    
+    source_map = {
+        "youtube": "YouTube",
+        "soundcloud": "SoundCloud",
+        "spotify": "Spotify",
+        "applemusic": "Apple Music",
+        "deezer": "Deezer",
+        "bandcamp": "Bandcamp",
+        "http": "Direct URL",
+    }
+    embed.add_field(name="Source", value=source_map.get(track.source, track.source or "Unknown"), inline=True)
+    
+    if track.artwork:
+        embed.set_thumbnail(url=track.artwork)
+    
+    if player and not player.queue.is_empty:
+        embed.add_field(name="Queue", value=f"{len(player.queue)} tracks remaining", inline=False)
+    
+    status = []
+    if player:
+        if player.loop_mode != "off":
+            status.append(f"🔁 {player.loop_mode.title()} loop")
+        if player.autoplay:
+            status.append("🎵 Autoplay ON")
+    if status:
+        embed.set_footer(text=" | ".join(status))
+    
+    return embed
+
+
+# ===== MUSIC CONTROL VIEW =====
+
+class MusicControlView(discord.ui.View):
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=600)
+        self.guild_id = guild_id
+        self.message = None
+    
+    def _get_player(self) -> MusicPlayer | None:
+        guild = bot.get_guild(self.guild_id)
+        return guild.voice_client if guild else None
+    
+    async def interaction_check(self, interaction: discord.Interaction):
+        player = self._get_player()
+        if player is None or interaction.user.voice is None:
+            await interaction.response.send_message("You need to be in a voice channel.", ephemeral=True)
+            return False
+        if interaction.user.voice.channel != player.channel:
+            await interaction.response.send_message("You need to be in my voice channel.", ephemeral=True)
+            return False
+        return True
+    
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+    
+    @discord.ui.button(label="⏯️ Play/Pause", style=discord.ButtonStyle.primary, row=0)
+    async def play_pause(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player = self._get_player()
+        if not player or not player.current:
+            return await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+        
+        if player.playing:
+            await player.pause(True)
+            note = "⏸️ Paused"
+        elif player.paused:
+            await player.pause(False)
+            note = "▶️ Resumed"
+        else:
+            return await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+        
+        await self._update_embed(player)
+        await interaction.response.send_message(note, ephemeral=True)
+    
+    @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.primary, row=0)
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player = self._get_player()
+        if not player or not player.current:
+            return await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+        await player.skip()
+        await interaction.response.send_message("⏭️ Skipped", ephemeral=True)
+    
+    @discord.ui.button(label="🔁 Loop", style=discord.ButtonStyle.secondary, row=0)
+    async def loop(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player = self._get_player()
+        if not player or not player.current:
+            return await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+        
+        modes = {"off": "track", "track": "queue", "queue": "off"}
+        player.loop_mode = modes.get(player.loop_mode, "off")
+        
+        labels = {"off": "🔁 Loop", "track": "🔂 Loop Track", "queue": "🔁 Loop Queue"}
+        button.label = labels[player.loop_mode]
+        
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send(f"Loop: **{player.loop_mode}**", ephemeral=True)
+    
+    @discord.ui.button(label="🔀 Shuffle", style=discord.ButtonStyle.secondary, row=0)
+    async def shuffle(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player = self._get_player()
+        if not player or player.queue.is_empty:
+            return await interaction.response.send_message("Queue is empty.", ephemeral=True)
+        player.queue.shuffle()
+        await interaction.response.send_message("🔀 Queue shuffled!", ephemeral=True)
+    
+    @discord.ui.button(label="⏹️ Stop", style=discord.ButtonStyle.danger, row=1)
+    async def stop(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player = self._get_player()
+        if not player:
+            return await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+        
+        player.autoplay = False
+        player.queue.clear()
+        player.loop_mode = "off"
+        await player.stop()
+        music_now_playing[self.guild_id] = None
+        
+        await interaction.response.send_message("⏹️ Stopped & cleared.", ephemeral=True)
+        await self._update_embed(player)
+    
+    @discord.ui.button(label="🎵 Autoplay: OFF", style=discord.ButtonStyle.success, row=1)
+    async def autoplay(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player = self._get_player()
+        if not player:
+            return await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+        
+        player.autoplay = not player.autoplay
+        button.label = f"🎵 Autoplay: {'ON' if player.autoplay else 'OFF'}"
+        button.style = discord.ButtonStyle.success if player.autoplay else discord.ButtonStyle.secondary
+        
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send(f"Autoplay: **{'ON' if player.autoplay else 'OFF'}**", ephemeral=True)
+    
+    @discord.ui.button(label="📜 Queue", style=discord.ButtonStyle.secondary, row=1)
+    async def show_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player = self._get_player()
+        if not player or player.queue.is_empty:
+            return await interaction.response.send_message("Queue is empty.", ephemeral=True)
+        
+        tracks = list(player.queue)[:15]
+        lines = []
+        for i, track in enumerate(tracks, 1):
+            dur = format_duration(track.length)
+            lines.append(f"`{i}.` [{track.title[:40]}]({track.uri}) — `{dur}`")
+        
+        embed = discord.Embed(
+            title=f"🎵 Queue ({len(player.queue)} tracks)",
+            description="\n".join(lines),
+            color=discord.Color.blurple()
+        )
+        if player.current:
+            embed.set_footer(text=f"Now playing: {player.current.title[:50]}")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    async def _update_embed(self, player: MusicPlayer):
+        if self.message and self.guild_id in music_now_playing:
+            track = music_now_playing[self.guild_id]
+            embed = build_music_embed(track, player)
+            try:
+                await self.message.edit(embed=embed, view=self)
+            except Exception:
+                pass
+
+
+# ===== MUSIC COMMANDS =====
+
+@bot.command(aliases=["p"])
+@commands.cooldown(2, 5, commands.BucketType.user)
+async def play(ctx, *, query: str):
+    """Play from Spotify, YouTube, SoundCloud, or direct URL."""
+    player = await ensure_voice(ctx)
+    if not player:
+        return
+    
+    query = query.strip()
+    
+    # Spotify links
+    if "spotify.com" in query:
+        await ctx.send("🎵 Resolving Spotify link...")
+        tracks = await wavelink.Playable.search(query)
+    elif query.startswith(("http://", "https://")):
+        tracks = await wavelink.Playable.search(query)
+    else:
+        # Search: Spotify first, fallback YouTube
+        await ctx.send(f"🔍 Searching: **{query}**")
+        try:
+            tracks = await wavelink.Playable.search(query, source=wavelink.TrackSource.Spotify)
+        except Exception:
+            tracks = await wavelink.Playable.search(query, source=wavelink.TrackSource.YouTube)
+    
+    if not tracks:
+        return await ctx.send("❌ No results found.")
+    
+    # Handle playlists
+    if isinstance(tracks, wavelink.Search):
+        if tracks.playlist:
+            added = 0
+            for track in tracks.tracks[:50]:
+                if not player.playing and not player.paused and added == 0:
+                    await player.play(track)
+                    music_now_playing[ctx.guild.id] = track
+                else:
+                    player.queue.put(track)
+                added += 1
+            
+            embed = discord.Embed(
+                title="📋 Playlist Added",
+                description=f"Added **{added}** tracks from **{tracks.playlist.name}**",
+                color=discord.Color.green()
+            )
+            return await ctx.send(embed=embed)
+        tracks = tracks.tracks
+    
+    # Single track
+    track = tracks[0] if isinstance(tracks, list) else tracks
+    
+    if not player.playing and not player.paused:
+        await player.play(track)
+        music_now_playing[ctx.guild.id] = track
+        
+        view = MusicControlView(ctx.guild.id)
+        msg = await ctx.send(embed=build_music_embed(track, player), view=view)
+        view.message = msg
+        music_control_messages[ctx.guild.id] = msg
+    else:
+        player.queue.put(track)
+        embed = discord.Embed(
+            title="➕ Added to Queue",
+            description=f"**[{track.title}]({track.uri})** by {track.author or 'Unknown'}",
+            color=discord.Color.blurple()
+        )
+        if track.artwork:
+            embed.set_thumbnail(url=track.artwork)
+        await ctx.send(embed=embed)
+
+
+@play.error
+async def play_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"⏳ Slow down! Try again in **{error.retry_after:.1f}s**.")
+    else:
+        raise error
+
+
+@bot.command()
+async def skip(ctx):
+    """Skip current track."""
+    player = ctx.voice_client
+    if not player or not player.playing:
+        return await ctx.send("Nothing is playing.")
+    await player.skip()
+    await ctx.send("⏭️ Skipped.")
+
+
+@bot.command()
+async def stop(ctx):
+    """Stop and clear everything."""
+    player = ctx.voice_client
+    if not player:
+        return await ctx.send("Nothing is playing.")
+    
+    player.autoplay = False
+    player.queue.clear()
+    player.loop_mode = "off"
+    await player.stop()
+    music_now_playing[ctx.guild.id] = None
+    
+    await ctx.send("⏹️ Stopped and cleared queue.")
+    await schedule_music_idle_disconnect(ctx.guild, ctx.channel)
+
+
+@bot.command()
+async def pause(ctx):
+    """Pause or resume."""
+    player = ctx.voice_client
+    if not player or not player.current:
+        return await ctx.send("Nothing is playing.")
+    
+    if player.paused:
+        await player.pause(False)
+        await ctx.send("▶️ Resumed.")
+    elif player.playing:
+        await player.pause(True)
+        await ctx.send("⏸️ Paused.")
+    else:
+        await ctx.send("Nothing is playing.")
+
+
+@bot.command(aliases=["q"])
+async def queue(ctx):
+    """Show queue."""
+    player = ctx.voice_client
+    if not player or player.queue.is_empty:
+        return await ctx.send("Queue is empty.")
+    
+    tracks = list(player.queue)[:20]
+    lines = []
+    for i, track in enumerate(tracks, 1):
+        dur = format_duration(track.length)
+        lines.append(f"`{i}.` [{track.title[:45]}]({track.uri}) — `{dur}`")
+    
+    embed = discord.Embed(
+        title=f"🎵 Queue ({len(player.queue)} tracks)",
+        description="\n".join(lines),
+        color=discord.Color.blurple()
+    )
+    if player.current:
+        embed.set_footer(text=f"Now playing: {player.current.title[:50]}")
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+async def np(ctx):
+    """Show now playing."""
+    player = ctx.voice_client
+    if not player or not player.current:
+        return await ctx.send("Nothing is playing.")
+    await ctx.send(embed=build_music_embed(player.current, player))
+
+
+@bot.command()
+async def join(ctx):
+    """Join voice channel."""
+    player = await ensure_voice(ctx)
+    if player:
+        await ctx.send(f"Joined **{player.channel.name}**.")
+
+
+@bot.command()
+async def leave(ctx):
+    """Leave voice channel."""
+    player = ctx.voice_client
+    if not player:
+        return await ctx.send("I'm not in a voice channel.")
+    
+    gid = ctx.guild.id
+    music_now_playing.pop(gid, None)
+    music_control_messages.pop(gid, None)
+    music_autoplay.pop(gid, None)
+    
+    await player.disconnect()
+    await ctx.send("Left the voice channel.")
+
+
+@bot.command()
+async def search(ctx, *, query: str):
+    """Search and pick from results."""
+    await ctx.send(f"🔍 Searching: **{query}**")
+    
+    try:
+        results = await wavelink.Playable.search(query, source=wavelink.TrackSource.Spotify)
+    except Exception:
+        results = await wavelink.Playable.search(query, source=wavelink.TrackSource.YouTube)
+    
+    if not results or not results.tracks:
+        return await ctx.send("No results found.")
+    
+    tracks = results.tracks[:10]
+    
+    embed = discord.Embed(
+        title="🔍 Search Results",
+        description="React to select:",
+        color=discord.Color.blurple()
+    )
+    for i, track in enumerate(tracks, 1):
+        dur = format_duration(track.length)
+        embed.add_field(name=f"{i}. {track.title[:50]}", value=f"{track.author or 'Unknown'} — `{dur}`", inline=False)
+    
+    msg = await ctx.send(embed=embed)
+    emojis = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    for i in range(min(len(tracks), 10)):
+        await msg.add_reaction(emojis[i])
+    await msg.add_reaction("❌")
+    
+    def check(reaction, user):
+        return user == ctx.author and reaction.message.id == msg.id and (
+            str(reaction.emoji) in emojis[:len(tracks)] or str(reaction.emoji) == "❌"
+        )
+    
+    try:
+        reaction, _ = await bot.wait_for("reaction_add", timeout=30.0, check=check)
+    except asyncio.TimeoutError:
+        return await ctx.send("Search timed out.")
+    
+    if str(reaction.emoji) == "❌":
+        return await ctx.send("Cancelled.")
+    
+    selected = tracks[emojis.index(str(reaction.emoji))]
+    player = await ensure_voice(ctx)
+    if not player:
+        return
+    
+    if not player.playing and not player.paused:
+        await player.play(selected)
+        music_now_playing[ctx.guild.id] = selected
+        
+        view = MusicControlView(ctx.guild.id)
+        msg = await ctx.send(embed=build_music_embed(selected, player), view=view)
+        view.message = msg
+        music_control_messages[ctx.guild.id] = msg
+    else:
+        player.queue.put(selected)
+        await ctx.send(f"➕ Added **{selected.title}** to queue.")
+
+
+# ============ IMPROVED LYRICS SYSTEM ============
 
 GENIUS_HEADERS = {"User-Agent": "TargetBot/1.0"}
 GENIUS_TAG_RE = re.compile(r"<[^>]+>")
 GENIUS_BLOCK_RE = re.compile(r'<div[^>]+data-lyrics-container="true"[^>]*>(.*?)</div>', re.DOTALL | re.IGNORECASE)
 
 
-def clean_lyrics_title(text):
+def clean_lyrics_title(text: str) -> str:
+    """Aggressively clean track titles for lyrics matching."""
     if not text:
         return ""
-
+    
     cleaned = text
     cleaned = re.sub(r"https?://\S+", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\bby\s+[A-Za-z0-9_.-]+\b", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\([^)]*(official|video|audio|lyrics?|visualizer|hd|4k)[^)]*\)", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\[[^\]]*(official|video|audio|lyrics?|visualizer|hd|4k)[^\]]*\]", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\(([^)]*(?:prod|producer|slowed|speed up|sped up|reverb|remix|edit|nightcore|bass boosted|snippet|mashup|version|cover|live|extended|instrumental|performance)[^)]*)\)", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\[([^\]]*(?:prod|producer|slowed|speed up|sped up|reverb|remix|edit|nightcore|bass boosted|snippet|mashup|version|cover|live|extended|instrumental|performance)[^\]]*)\]", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\b(official video|official audio|lyrics video|lyric video|visualizer|audio|lyrics|hd|4k|prod\.?\s+by|produced by|slowed(?:\s*\+\s*reverb)?|sped up|speed up|reverb|nightcore|bass boosted|snippet|mashup|extended|instrumental|live performance|live version)\b", "", cleaned, flags=re.IGNORECASE)
+    
+    patterns = [
+        r"\([^)]*(official|video|audio|lyrics?|visualizer|hd|4k|explicit|clean)[^)]*\)",
+        r"\[[^\]]*(official|video|audio|lyrics?|visualizer|hd|4k|explicit|clean)[^\]]*\]",
+        r"\(([^)]*(?:prod|producer|slowed|speed up|sped up|reverb|remix|edit|nightcore|bass boosted|snippet|mashup|version|cover|live|extended|instrumental|performance)[^)]*)\)",
+        r"\[([^\]]*(?:prod|producer|slowed|speed up|sped up|reverb|remix|edit|nightcore|bass boosted|snippet|mashup|version|cover|live|extended|instrumental|performance)[^\]]*)\]",
+        r"\b(official video|official audio|lyrics video|lyric video|visualizer|audio|lyrics|hd|4k|prod\.?\s+by|produced by|slowed(?:\s*\+\s*reverb)?|sped up|speed up|reverb|nightcore|bass boosted|snippet|mashup|extended|instrumental|live performance|live version)\b",
+    ]
+    for pattern in patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+    
     cleaned = re.sub(r"\bft\.?\b", "feat", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bfeat\.?\s+[^-|\n]+", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bwith\s+[^-|\n]+", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*[|/]\s*.*$", "", cleaned)
-    cleaned = re.sub(r"\s*[-–—]\s*(?:prod.*|slowed.*|sped up.*|reverb.*|remix.*|edit.*|nightcore.*|bass boosted.*)$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*[-–—]\s*(?:prod.*|slowed.*|sped up.*|reverb.*|remix.*|edit.*|nightcore.*|bass boosted.*)$", "", flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*[-–—]\s*$", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
+    
     return cleaned.strip()
 
 
-def build_lyrics_search_variants(text):
-    cleaned = clean_lyrics_title(text)
-    variants = []
-
-    def add_variant(value):
-        value = clean_lyrics_title(value)
-        key = value.lower()
-        if value and key not in seen:
-            seen.add(key)
-            variants.append(value)
-
+def build_lyrics_search_queries(title: str, artist: str | None = None) -> list[str]:
+    """Build multiple search queries for better matching."""
+    queries = []
     seen = set()
-    add_variant(cleaned)
+    
+    def add(q):
+        q = q.strip().lower()
+        if q and q not in seen:
+            seen.add(q)
+            queries.append(q)
+    
+    clean_title = clean_lyrics_title(title)
+    clean_artist = clean_lyrics_title(artist or "")
+    
+    add(f"{clean_artist} {clean_title}")
+    add(f"{clean_title} {clean_artist}")
+    add(clean_title)
+    
+    if " - " in clean_title:
+        parts = [p.strip() for p in clean_title.split(" - ", 1)]
+        add(f"{parts[0]} {parts[1]}")
+        add(parts[1])
+    
+    no_paren = re.sub(r"[\(\[].*?[\)\]]", "", clean_title).strip()
+    if no_paren != clean_title:
+        add(no_paren)
+        if clean_artist:
+            add(f"{clean_artist} {no_paren}")
+    
+    return queries
 
-    dash_parts = [part.strip() for part in re.split(r"\s[-–—]\s", cleaned) if part.strip()]
-    if len(dash_parts) >= 2:
-        add_variant(f"{dash_parts[0]} - {dash_parts[1]}")
-        add_variant(dash_parts[1])
-        add_variant(dash_parts[0])
 
-    no_feat = re.sub(r"\bfeat\b.*$", "", cleaned, flags=re.IGNORECASE).strip(" -")
-    add_variant(no_feat)
-
-    no_paren = re.sub(r"\([^)]*\)", "", cleaned).strip(" -")
-    add_variant(no_paren)
-
-    return variants
-
-
-def split_lyrics_chunks(text, chunk_size=1800):
+def split_lyrics_chunks(text: str, chunk_size: int = 1800) -> list[str]:
+    """Split lyrics into Discord-safe chunks."""
     lines = text.splitlines()
     chunks = []
     current = ""
-
+    
     for line in lines:
-        next_part = line if not current else f"{current}\n{line}"
-        if len(next_part) <= chunk_size:
-            current = next_part
+        test = f"{current}\n{line}" if current else line
+        if len(test) <= chunk_size:
+            current = test
         else:
             if current:
-                chunks.append(current)
+                chunks.append(current.strip())
             if len(line) <= chunk_size:
                 current = line
             else:
                 for i in range(0, len(line), chunk_size):
                     chunks.append(line[i:i + chunk_size])
                 current = ""
-
+    
     if current:
-        chunks.append(current)
-
+        chunks.append(current.strip())
+    
     return chunks or [text[:chunk_size]]
 
 
-def format_lyrics_for_embed(text):
+def format_lyrics_for_embed(text: str) -> str:
+    """Format lyrics with proper spacing."""
     lines = [line.rstrip() for line in text.splitlines()]
-    formatted_lines = []
+    formatted = []
     blank_streak = 0
-
+    
     for line in lines:
         if not line.strip():
             blank_streak += 1
             if blank_streak <= 1:
-                formatted_lines.append("")
+                formatted.append("")
             continue
-
+        
         blank_streak = 0
-        formatted_lines.append(line)
-
+        formatted.append(line)
         if len(line) > 25:
-            formatted_lines.append("")
-
-    formatted = "\n".join(formatted_lines).strip()
-    return formatted or text
-
-
-def build_lyrics_embed(found_label, chunks, page_index, source_url=None):
-    total_pages = len(chunks)
-    embed = discord.Embed(
-        title=found_label,
-        description=chunks[page_index],
-        color=discord.Color.magenta()
-    )
-    if source_url:
-        embed.description += f"\n\n[Open source]({source_url})"
-    embed.set_footer(text=f"Lyrics page {page_index + 1}/{total_pages}")
-    return embed
+            formatted.append("")
+    
+    return "\n".join(formatted).strip() or text
 
 
-def build_lyrics_queries(title, artist, track):
-    title_variants = build_lyrics_search_variants(title)
-    track_variants = build_lyrics_search_variants(track or title)
-    cleaned_title = title_variants[0] if title_variants else clean_lyrics_title(title)
-    cleaned_track = track_variants[0] if track_variants else clean_lyrics_title(track or title)
-    cleaned_artist = clean_lyrics_title(artist or "")
-
-    queries = []
-    for track_variant in track_variants or [cleaned_track]:
-        if cleaned_artist and track_variant:
-            queries.append(f"{cleaned_artist} {track_variant}")
-            queries.append(f"{track_variant} {cleaned_artist}")
-            queries.append(f"{cleaned_artist} - {track_variant}")
-        if track_variant:
-            queries.append(track_variant)
-    for title_variant in title_variants or [cleaned_title]:
-        if title_variant:
-            queries.append(title_variant)
-    if title and title not in queries:
-        queries.append(title)
-
-    seen = set()
-    ordered = []
-    for query in queries:
-        key = query.strip().lower()
-        if key and key not in seen:
-            seen.add(key)
-            ordered.append(query)
-    return ordered
-
-
-def build_lyrics_pairs(title, artist, track):
-    title_variants = build_lyrics_search_variants(title)
-    track_variants = build_lyrics_search_variants(track or title)
-    cleaned_title = title_variants[0] if title_variants else clean_lyrics_title(title)
-    cleaned_track = track_variants[0] if track_variants else clean_lyrics_title(track or title)
-    cleaned_artist = clean_lyrics_title(artist or "")
-
-    pairs = []
-    for track_variant in track_variants or [cleaned_track]:
-        if cleaned_artist and track_variant:
-            pairs.append((cleaned_artist, track_variant))
-    if cleaned_artist and cleaned_title and cleaned_title != cleaned_track:
-        pairs.append((cleaned_artist, cleaned_title))
-
-    title_parts = [part.strip() for part in cleaned_title.split(" - ") if part.strip()]
-    if len(title_parts) >= 2:
-        pairs.append((title_parts[0], title_parts[-1]))
-
-    if artist or track or title:
-        pairs.append((artist or "unknown", track or cleaned_title or title))
-
-    seen = set()
-    ordered = []
-    for artist_name, song_name in pairs:
-        key = (artist_name.strip().lower(), song_name.strip().lower())
-        if key not in seen and key[1]:
-            seen.add(key)
-            ordered.append((artist_name, song_name))
-    return ordered
-
-
-def normalize_lyrics_key(text):
-    cleaned = clean_lyrics_title(text or "").lower()
-    cleaned = re.sub(r"[^a-z0-9\s]", " ", cleaned)
-    cleaned = re.sub(r"(ft|feat|featuring|prod|with)", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
-
-
-def similarity_score(a, b):
-    if not a or not b:
-        return 0.0
-    return SequenceMatcher(None, a, b).ratio()
-
-
-def score_lyrics_candidate(result_title, result_artist, title, artist, track):
-    target_title = normalize_lyrics_key(track or title)
-    target_artist = normalize_lyrics_key(artist or "")
-    target_combo = normalize_lyrics_key(f"{artist or ''} {track or title}")
-    result_title = normalize_lyrics_key(result_title)
-    result_artist = normalize_lyrics_key(result_artist)
-    result_combo = normalize_lyrics_key(f"{result_artist} {result_title}")
-
-    title_score = similarity_score(target_title, result_title)
-    artist_score = similarity_score(target_artist, result_artist) if target_artist else 0.75
-    combo_score = similarity_score(target_combo, result_combo)
-    return (title_score * 0.5) + (artist_score * 0.2) + (combo_score * 0.3)
-
-
-def choose_best_lrclib_match(results, title, artist, track):
-    best_result = None
-    best_score = 0.0
-
-    for result in results:
-        score = score_lyrics_candidate(
-            result.get("trackName") or result.get("name") or "",
-            result.get("artistName") or result.get("artist") or "",
-            title,
-            artist,
-            track,
-        )
-        if score > best_score:
-            best_score = score
-            best_result = result
-
-    if best_result and best_score >= 0.72:
-        return best_result
-    return None
-
-
-def choose_best_genius_hit(hits, title, artist, track):
-    best_result = None
-    best_score = 0.0
-
-    for hit in hits:
-        result = hit.get("result", {})
-        score = score_lyrics_candidate(
-            result.get("title") or "",
-            result.get("primary_artist", {}).get("name") or "",
-            title,
-            artist,
-            track,
-        )
-        if score > best_score:
-            best_score = score
-            best_result = result
-
-    if best_result and best_score >= 0.62:
-        return best_result
-    return None
-
-
-def extract_genius_lyrics(page_html):
+def extract_genius_lyrics(page_html: str) -> str | None:
+    """Extract lyrics from Genius HTML."""
     matches = GENIUS_BLOCK_RE.findall(page_html)
     if not matches:
         return None
-
+    
     parts = []
     for block in matches:
         block = re.sub(r"<br\s*/?>", "\n", block, flags=re.IGNORECASE)
@@ -1235,242 +1627,139 @@ def extract_genius_lyrics(page_html):
         cleaned = "\n".join(line.rstrip() for line in block.splitlines()).strip()
         if cleaned:
             parts.append(cleaned)
-
-    if not parts:
-        return None
-    return "\n\n".join(parts).strip()
+    
+    return "\n\n".join(parts).strip() if parts else None
 
 
-def fetch_genius_lyrics(title, artist, track):
-    for search_query in build_lyrics_queries(title, artist, track):
-        try:
-            search_url = f"https://genius.com/api/search/multi?per_page=8&q={quote_plus(search_query)}"
-            response = requests.get(search_url, timeout=10, headers=GENIUS_HEADERS)
-            if not response.ok:
+async def fetch_genius_lyrics(title: str, artist: str | None = None) -> tuple[str, str, str] | None:
+    """Fetch lyrics from Genius (async)."""
+    queries = build_lyrics_search_queries(title, artist)
+    
+    async with aiohttp.ClientSession(headers=GENIUS_HEADERS) as session:
+        for query in queries:
+            try:
+                url = f"https://genius.com/api/search/multi?per_page=5&q={quote_plus(query)}"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+            except Exception:
                 continue
-            payload = response.json()
-        except Exception:
-            continue
-
-        sections = payload.get("response", {}).get("sections", [])
-        hits = []
-        for section in sections:
-            hits.extend(section.get("hits", []))
-
-        best_result = choose_best_genius_hit(hits, title, artist, track)
-        if not best_result:
-            continue
-
-        song_url = best_result.get("url")
-        if not song_url:
-            continue
-
-        try:
-            page = requests.get(song_url, timeout=10, headers=GENIUS_HEADERS)
-        except Exception:
-            continue
-        if not page.ok:
-            continue
-
-        lyrics_text = extract_genius_lyrics(page.text)
-        if lyrics_text:
-            artist_name = best_result.get("primary_artist", {}).get("name") or artist or "Unknown artist"
-            song_title = best_result.get("title") or track or title
-            return lyrics_text, f"{artist_name} - {song_title}", song_url
+            
+            sections = data.get("response", {}).get("sections", [])
+            hits = []
+            for section in sections:
+                hits.extend(section.get("hits", []))
+            
+            if not hits:
+                continue
+            
+            best = None
+            best_score = 0.0
+            
+            for hit in hits:
+                result = hit.get("result", {})
+                res_title = clean_lyrics_title(result.get("title", ""))
+                res_artist = clean_lyrics_title(result.get("primary_artist", {}).get("name", ""))
+                
+                target_title = clean_lyrics_title(title)
+                target_artist = clean_lyrics_title(artist or "")
+                
+                title_sim = SequenceMatcher(None, target_title, res_title).ratio()
+                artist_sim = SequenceMatcher(None, target_artist, res_artist).ratio() if target_artist else 0.75
+                score = (title_sim * 0.6) + (artist_sim * 0.4)
+                
+                if score > best_score:
+                    best_score = score
+                    best = result
+            
+            if not best or best_score < 0.55:
+                continue
+            
+            song_url = best.get("url")
+            if not song_url:
+                continue
+            
+            try:
+                async with session.get(song_url, timeout=aiohttp.ClientTimeout(total=10)) as page:
+                    if page.status != 200:
+                        continue
+                    html = await page.text()
+            except Exception:
+                continue
+            
+            lyrics = extract_genius_lyrics(html)
+            if lyrics:
+                artist_name = best.get("primary_artist", {}).get("name") or artist or "Unknown"
+                song_title = best.get("title") or title
+                return lyrics, f"{artist_name} - {song_title}", song_url
+    
     return None
 
 
-def fetch_lrclib_lyrics(title, artist, track, source_url):
-    for search_query in build_lyrics_queries(title, artist, track):
-        try:
-            lrclib_url = f"https://lrclib.net/api/search?q={quote_plus(search_query)}"
-            response = requests.get(
-                lrclib_url,
-                timeout=10,
-                headers={"User-Agent": "TargetBot/1.0"}
-            )
-            if not response.ok:
+async def fetch_lrclib_lyrics(title: str, artist: str | None = None) -> tuple[str, str] | None:
+    """Fetch lyrics from LRCLIB (synced lyrics database)."""
+    queries = build_lyrics_search_queries(title, artist)
+    
+    async with aiohttp.ClientSession() as session:
+        for query in queries:
+            try:
+                url = f"https://lrclib.net/api/search?q={quote_plus(query)}"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        continue
+                    results = await resp.json()
+            except Exception:
                 continue
-            results = response.json()
-        except Exception:
-            continue
-
-        if not isinstance(results, list) or not results:
-            continue
-
-        best = choose_best_lrclib_match(results, title, artist, track)
-        if not best:
-            continue
-
-        lyrics_text = best.get("plainLyrics") or best.get("syncedLyrics")
-        if not lyrics_text:
-            continue
-
-        best_artist = best.get("artistName") or artist or "Unknown artist"
-        best_track = best.get("trackName") or track or title
-        return (lyrics_text, f"{best_artist} - {best_track}", source_url), "lrclib"
+            
+            if not isinstance(results, list) or not results:
+                continue
+            
+            best = None
+            best_score = 0.0
+            
+            for result in results:
+                track_name = result.get("trackName", "")
+                artist_name = result.get("artistName", "")
+                
+                target_title = clean_lyrics_title(title)
+                target_artist = clean_lyrics_title(artist or "")
+                
+                title_sim = SequenceMatcher(None, target_title, clean_lyrics_title(track_name)).ratio()
+                artist_sim = SequenceMatcher(None, target_artist, clean_lyrics_title(artist_name)).ratio() if target_artist else 0.75
+                score = (title_sim * 0.5) + (artist_sim * 0.3) + 0.2
+                
+                if score > best_score:
+                    best_score = score
+                    best = result
+            
+            if not best or best_score < 0.65:
+                continue
+            
+            lyrics = best.get("plainLyrics") or best.get("syncedLyrics")
+            if lyrics:
+                artist_name = best.get("artistName") or artist or "Unknown"
+                track_name = best.get("trackName") or title
+                return lyrics, f"{artist_name} - {track_name}"
+    
     return None
 
 
-def fetch_musixmatch_lyrics(title, artist, track, source_url):
-    api_key = os.environ.get("MUSIXMATCH_API_KEY")
-    if not api_key:
-        return None
-
-    for search_query in build_lyrics_queries(title, artist, track):
-        try:
-            search_url = (
-                "https://api.musixmatch.com/ws/1.1/track.search"
-                f"?q_track_artist={quote_plus(search_query)}"
-                f"&page_size=5&s_track_rating=desc&apikey={quote_plus(api_key)}"
-            )
-            response = requests.get(
-                search_url,
-                timeout=10,
-                headers={"User-Agent": "TargetBot/1.0"},
-            )
-            if not response.ok:
-                continue
-            data = response.json()
-        except Exception:
-            continue
-
-        track_list = (
-            data.get("message", {})
-            .get("body", {})
-            .get("track_list", [])
-        )
-        if not track_list:
-            continue
-
-        best_track_data = None
-        best_score = 0.0
-        for item in track_list:
-            track_data = item.get("track", {})
-            score = score_lyrics_candidate(
-                track_data.get("track_name") or "",
-                track_data.get("artist_name") or "",
-                title,
-                artist,
-                track,
-            )
-            if score > best_score:
-                best_score = score
-                best_track_data = track_data
-
-        if not best_track_data or best_score < 0.72:
-            continue
-
-        track_id = best_track_data.get("track_id")
-        if not track_id:
-            continue
-
-        try:
-            lyrics_url = (
-                "https://api.musixmatch.com/ws/1.1/track.lyrics.get"
-                f"?track_id={track_id}&apikey={quote_plus(api_key)}"
-            )
-            response = requests.get(
-                lyrics_url,
-                timeout=10,
-                headers={"User-Agent": "TargetBot/1.0"},
-            )
-            if not response.ok:
-                continue
-            data = response.json()
-        except Exception:
-            continue
-
-        lyrics_text = (
-            data.get("message", {})
-            .get("body", {})
-            .get("lyrics", {})
-            .get("lyrics_body", "")
-            .strip()
-        )
-        if not lyrics_text:
-            continue
-
-        lines = []
-        for line in lyrics_text.splitlines():
-            if "******* This Lyrics is NOT for Commercial use *******" in line:
-                break
-            if line.strip():
-                lines.append(line.rstrip())
-        lyrics_text = "\n".join(lines).strip()
-        if not lyrics_text:
-            continue
-
-        best_artist = best_track_data.get("artist_name") or artist or "Unknown artist"
-        best_name = best_track_data.get("track_name") or track or title
-        return (lyrics_text, f"{best_artist} - {best_name}", source_url), "musixmatch"
-
+async def fetch_lyrics(title: str, artist: str | None = None) -> tuple[str, str, str | None, str] | None:
+    """Fetch lyrics from multiple sources."""
+    result = await fetch_genius_lyrics(title, artist)
+    if result:
+        return (*result, "genius")
+    
+    result = await fetch_lrclib_lyrics(title, artist)
+    if result:
+        return (*result, None, "lrclib")
+    
     return None
-
-
-def fetch_ovh_lyrics(title, artist, track, source_url):
-    for candidate_artist, candidate_track in build_lyrics_pairs(title, artist, track):
-        try:
-            fallback_url = (
-                f"https://api.lyrics.ovh/v1/"
-                f"{quote_plus(candidate_artist)}/{quote_plus(candidate_track)}"
-            )
-            response = requests.get(
-                fallback_url,
-                timeout=10,
-                headers={"User-Agent": "TargetBot/1.0"}
-            )
-            if not response.ok:
-                continue
-            data = response.json()
-        except Exception:
-            continue
-
-        lyrics_text = data.get("lyrics", "").strip()
-        if not lyrics_text:
-            continue
-
-        score = score_lyrics_candidate(candidate_track, candidate_artist, title, artist, track)
-        if score < 0.68:
-            continue
-
-        return (lyrics_text, f"{candidate_artist} - {candidate_track}", source_url), "lyrics.ovh"
-    return None
-
-
-def fetch_lyrics_payload(current=None, manual_query=None):
-    if manual_query:
-        title = manual_query
-        artist = None
-        track = manual_query
-        source_url = getattr(current, "webpage_url", None) if current else None
-    else:
-        title = current.title
-        artist = getattr(current, "artist", None)
-        track = getattr(current, "track", None)
-        source_url = getattr(current, "webpage_url", None)
-
-    genius_result = fetch_genius_lyrics(title, artist, track)
-    if genius_result:
-        return genius_result, "genius"
-
-    lrclib_result = fetch_lrclib_lyrics(title, artist, track, source_url)
-    if lrclib_result:
-        return lrclib_result
-
-    musixmatch_result = fetch_musixmatch_lyrics(title, artist, track, source_url)
-    if musixmatch_result:
-        return musixmatch_result
-
-    ovh_result = fetch_ovh_lyrics(title, artist, track, source_url)
-    if ovh_result:
-        return ovh_result
-
-    return None, None
 
 
 class LyricsPaginatorView(discord.ui.View):
-    def __init__(self, requester, found_label, chunks, source_url=None):
+    def __init__(self, requester: discord.Member, found_label: str, chunks: list[str], source_url: str | None = None):
         super().__init__(timeout=180)
         self.requester = requester
         self.found_label = found_label
@@ -1479,89 +1768,80 @@ class LyricsPaginatorView(discord.ui.View):
         self.page_index = 0
         self.message = None
         self._refresh_buttons()
-
+    
     def _refresh_buttons(self):
         self.prev_button.disabled = self.page_index == 0
         self.next_button.disabled = self.page_index >= len(self.chunks) - 1
-
-    def current_embed(self):
-        return build_lyrics_embed(
-            self.found_label,
-            self.chunks,
-            self.page_index,
-            self.source_url
+    
+    def current_embed(self) -> discord.Embed:
+        total = len(self.chunks)
+        embed = discord.Embed(
+            title=self.found_label,
+            description=self.chunks[self.page_index],
+            color=discord.Color.magenta()
         )
-
+        if self.source_url:
+            embed.description += f"\n\n[Source on Genius]({self.source_url})"
+        embed.set_footer(text=f"Page {self.page_index + 1}/{total}")
+        return embed
+    
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.requester.id:
             await interaction.response.send_message("This isn't your lyrics panel.", ephemeral=True)
             return False
         return True
-
+    
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
         if self.message:
-            await self.message.edit(view=self)
-
-    @discord.ui.button(label="Previous Page", style=discord.ButtonStyle.secondary)
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+    
+    @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.secondary)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page_index -= 1
         self._refresh_buttons()
         await interaction.response.edit_message(embed=self.current_embed(), view=self)
-
-    @discord.ui.button(label="Next Page", style=discord.ButtonStyle.primary)
+    
+    @discord.ui.button(label="▶️ Next", style=discord.ButtonStyle.primary)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page_index += 1
         self._refresh_buttons()
         await interaction.response.edit_message(embed=self.current_embed(), view=self)
 
 
-async def send_lyrics_panel(send_callable, requester, guild_id=None, manual_query=None):
-    current = music_now.get(guild_id) if guild_id is not None else None
-    if current is None and not manual_query:
-        return None
-
-    payload, source_name = fetch_lyrics_payload(current, manual_query=manual_query)
-    if not payload:
-        return False
-
-    lyrics_text, found_label, source_url = payload
-    if source_name != "genius":
-        search_label = manual_query or current.title
-        await send_callable(f"Genius missed it, trying **{source_name}** for: **{search_label}**")
-
-    lyrics_text = format_lyrics_for_embed(lyrics_text)
-    chunks = split_lyrics_chunks(lyrics_text, chunk_size=900)
-    view = LyricsPaginatorView(requester, found_label, chunks, source_url)
-    message = await send_callable(embed=view.current_embed(), view=view)
-    view.message = message
-    return message
-
-
 @bot.command()
-async def lyrics(ctx, *, song_name=None):
-    guild = ctx.guild
-
-    current = music_now.get(guild.id)
-    if current is None and not song_name:
-        return await ctx.send("Nothing is playing right now.")
-
-    search_label = song_name or current.title
-    await ctx.send(f"Searching lyrics for: **{search_label}**")
-
-    try:
-        message = await send_lyrics_panel(ctx.send, ctx.author, guild.id if current else None, manual_query=song_name)
-        if message is None:
-            await ctx.send("Nothing is playing right now.")
-        elif message is False:
-            if song_name:
-                await ctx.send("Failed to find lyrics for that song.")
-            else:
-                await ctx.send("Failed to find lyrics please try to use `!lyrics <song name>`")
-    except Exception as e:
-        print(f"Lyrics error: {e}")
-        await ctx.send("Error getting lyrics.")
+async def lyrics(ctx, *, song_name: str = None):
+    """Fetch lyrics for current track or search manually."""
+    player = ctx.voice_client
+    
+    if song_name:
+        await ctx.send(f"🔍 Searching lyrics for: **{song_name}**")
+        result = await fetch_lyrics(song_name)
+    elif player and player.current:
+        track = player.current
+        await ctx.send(f"🔍 Searching lyrics for: **{track.title}**")
+        result = await fetch_lyrics(track.title, track.author)
+    else:
+        return await ctx.send("Nothing is playing. Use `!lyrics <song name>` to search.")
+    
+    if not result:
+        return await ctx.send("❌ Couldn't find lyrics for this song.")
+    
+    lyrics_text, label, source_url, source_name = result
+    
+    if source_name != "genius":
+        await ctx.send(f"ℹ️ Genius missed it, found via **{source_name}**.")
+    
+    formatted = format_lyrics_for_embed(lyrics_text)
+    chunks = split_lyrics_chunks(formatted, chunk_size=900)
+    
+    view = LyricsPaginatorView(ctx.author, label, chunks, source_url)
+    msg = await ctx.send(embed=view.current_embed(), view=view)
+    view.message = msg
 
 # ======= ON JOIN =========
 @bot.event
