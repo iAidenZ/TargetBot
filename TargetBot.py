@@ -839,7 +839,7 @@ recent_play_requests = {}
 
 
 YTDL_OPTS = {
-    "format": "bestaudio/best",
+    "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
@@ -847,6 +847,8 @@ YTDL_OPTS = {
     "source_address": "0.0.0.0",
     "socket_timeout": 10,
     "cookiefile": "cookies.txt",
+    "extractor_retries": 3,
+    "fragment_retries": 3,
 }
 
 FFMPEG_OPTS = {
