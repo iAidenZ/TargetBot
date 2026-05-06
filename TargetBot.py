@@ -839,7 +839,7 @@ recent_play_requests = {}
 
 
 YTDL_OPTS = {
-    "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best",
+    "format": "worstaudio/worst",
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
@@ -849,6 +849,7 @@ YTDL_OPTS = {
     "cookiefile": "cookies.txt",
     "extractor_retries": 3,
     "fragment_retries": 3,
+    "ignoreerrors": True,
 }
 
 FFMPEG_OPTS = {
@@ -877,11 +878,23 @@ class YTDLTrack:
         loop = asyncio.get_event_loop()
         if not query.startswith("http"):
             query = f"ytsearch:{query}"
-        data = await loop.run_in_executor(
-            None, lambda: _ytdl.extract_info(query, download=False)
-        )
-        if "entries" in data:
-            data = data["entries"][0]
+
+        def _extract():
+            # Try with format preference first, fall back to any available
+            for fmt in ["bestaudio/best", "best"]:
+                try:
+                    opts = {**YTDL_OPTS, "format": fmt}
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        data = ydl.extract_info(query, download=False)
+                        if "entries" in data:
+                            data = data["entries"][0]
+                        if data.get("url"):
+                            return data
+                except Exception:
+                    continue
+            raise Exception("No playable format found for this track.")
+
+        data = await loop.run_in_executor(None, _extract)
         return cls(data, requester=requester)
 
     @classmethod
