@@ -838,6 +838,9 @@ music_starting  = set()
 recent_play_requests = {}
 
 
+import os as _os
+_COOKIES_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "cookies.txt")
+
 YTDL_OPTS = {
     "format": "worstaudio/worst",
     "noplaylist": True,
@@ -845,11 +848,11 @@ YTDL_OPTS = {
     "no_warnings": True,
     "default_search": "ytsearch",
     "source_address": "0.0.0.0",
-    "socket_timeout": 10,
-    "cookiefile": "cookies.txt",
-    "extractor_retries": 3,
-    "fragment_retries": 3,
-    "ignoreerrors": True,
+    "socket_timeout": 15,
+    "cookiefile": _COOKIES_PATH if _os.path.exists(_COOKIES_PATH) else None,
+    "extractor_retries": 5,
+    "fragment_retries": 5,
+    "ignoreerrors": False,
 }
 
 FFMPEG_OPTS = {
@@ -954,6 +957,10 @@ async def _play_next(guild_id: int, text_channel):
 @bot.event
 async def on_ready():
     load_data()
+    if _os.path.exists(_COOKIES_PATH):
+        print(f"[Music] ✅ cookies.txt found at {_COOKIES_PATH}")
+    else:
+        print(f"[Music] ⚠️ cookies.txt NOT found at {_COOKIES_PATH} — YouTube may block requests")
     print(f"Logged in as {bot.user}")
 
 
