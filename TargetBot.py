@@ -828,10 +828,28 @@ async def on_ready():
 import wavelink
 
 # ── Lavalink node configuration ────────────────────────────────────────────
-LAVALINK_HOST = os.environ.get("LAVALINK_HOST", "127.0.0.1")
-LAVALINK_PORT = int(os.environ.get("LAVALINK_PORT", 2333))
-LAVALINK_PASSWORD = os.environ.get("LAVALINK_PASSWORD", "youshallnotpass")
-LAVALINK_SECURE = os.environ.get("LAVALINK_SECURE", "false").lower() == "true"
+LAVALINK_NODES = [
+    # Node 1 — jirayu.net (v4, high uptime ~98%)
+    {
+        "uri":      "ws://lavalink.jirayu.net:13592",
+        "password": "youshallnotpass",
+    },
+    # Node 2 — nexcloud (v4, ~99.7% uptime)
+    {
+        "uri":      "ws://n3.nexcloud.in:2026",
+        "password": "nexcloud",
+    },
+    # Node 3 — serenetia (v4, SSL)
+    {
+        "uri":      "wss://lavalinkv4.serenetia.com:443",
+        "password": "https://dsc.gg/ajidevserver",
+    },
+    # Node 4 — vexanode
+    {
+        "uri":      "ws://omega.vexanode.cloud:2031",
+        "password": "https://discord.vexanode.cloud",
+    },
+]
 
 # ── Music state globals ─────────────────────────────────────────────────────
 music_queues = {}
@@ -857,13 +875,16 @@ class MusicPlayer(wavelink.Player):
 
 
 async def connect_lavalink():
-    """Connect bot to Lavalink node on startup."""
-    node = wavelink.Node(
-        uri=f"{'wss' if LAVALINK_SECURE else 'ws'}://{LAVALINK_HOST}:{LAVALINK_PORT}",
-        password=LAVALINK_PASSWORD,
-    )
-    await wavelink.Pool.connect(client=bot, nodes=[node])
-    print(f"Connected to Lavalink at {LAVALINK_HOST}:{LAVALINK_PORT}")
+    """Try each public Lavalink node in order until one connects."""
+    nodes = [
+        wavelink.Node(uri=n["uri"], password=n["password"])
+        for n in LAVALINK_NODES
+    ]
+    try:
+        await wavelink.Pool.connect(client=bot, nodes=nodes)
+        print(f"[Music] Connected to Lavalink — {len(nodes)} node(s) attempted.")
+    except Exception as e:
+        print(f"[Music] WARNING: Could not connect to any Lavalink node: {e}")
 
 
 # ── Override on_ready to connect Lavalink ──────────────────────────────────
