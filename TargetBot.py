@@ -4,6 +4,7 @@ from discord.ext.commands import BucketType
 import random
 import asyncio
 import json
+import re
 import os
 import string
 import time
