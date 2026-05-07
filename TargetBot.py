@@ -949,6 +949,41 @@ async def _yt_dlp_search(query: str, limit: int = 1) -> list:
     return await loop.run_in_executor(None, _do_search)
 
 
+async def _soundcloud_search(query: str, limit: int = 1) -> list:
+    """Fallback search via SoundCloud using yt-dlp."""
+    loop = asyncio.get_event_loop()
+
+    def _do_search():
+        try:
+            data = _ytdl.extract_info(f"scsearch{limit}:{query}", download=False)
+        except Exception:
+            return []
+
+        entries = data.get("entries") if isinstance(data, dict) else None
+        if not entries:
+            return []
+
+        results = []
+        for item in entries[:limit]:
+            if not item:
+                continue
+            results.append(
+                {
+                    "id": item.get("id", ""),
+                    "title": item.get("title", "Unknown"),
+                    "artist": item.get("uploader") or item.get("artist") or "Unknown",
+                    "duration": item.get("duration"),
+                    "thumbnail": item.get("thumbnail"),
+                    "webpage_url": item.get("webpage_url") or item.get("original_url") or "",
+                    "stream_url": item.get("url", ""),
+                    "source": "soundcloud",
+                }
+            )
+        return results
+
+    return await loop.run_in_executor(None, _do_search)
+
+
 async def _piped_stream_url(video_id: str) -> str:
     """Get direct audio stream URL from Piped — no bot detection."""
     loop = asyncio.get_event_loop()
@@ -993,6 +1028,7 @@ class YTDLTrack:
         self.artist      = data.get("artist") or data.get("uploader") or "Unknown"
         self.requester   = requester
         self.video_id    = data.get("id", "")
+        self.source      = data.get("source", "youtube")
 
     @classmethod
     async def fetch(cls, query: str, requester=None) -> "YTDLTrack":
@@ -1008,25 +1044,32 @@ class YTDLTrack:
                 "title": "YouTube Video",
                 "artist": "Unknown",
                 "webpage_url": f"https://www.youtube.com/watch?v={video_id}",
+                "source": "youtube",
             }
         else:
             results = await _piped_search(query, limit=1)
             if not results:
+                results = await _soundcloud_search(query, limit=1)
+            if not results:
                 results = await _yt_dlp_search(query, limit=1)
             if not results:
-                raise Exception("No results found.")
+                raise Exception("No results found. YouTube search is blocked on Railway right now, so try a SoundCloud link or use !search.")
             meta = results[0]
             video_id = meta["id"]
 
-        stream_url = await _piped_stream_url(video_id)
+        stream_url = meta.get("stream_url", "")
         if not stream_url:
-            raise Exception("Could not get audio stream. Try another song.")
+            stream_url = await _piped_stream_url(video_id)
+        if not stream_url:
+            raise Exception("Could not get audio stream. Try another song or a SoundCloud link.")
 
         return cls(meta, stream_url=stream_url, requester=requester)
 
     @classmethod
     async def search_many(cls, query: str, limit: int = 5, requester=None):
         results = await _piped_search(query, limit=limit)
+        if not results:
+            results = await _soundcloud_search(query, limit=limit)
         if not results:
             results = await _yt_dlp_search(query, limit=limit)
         return [cls(r, requester=requester) for r in results]
