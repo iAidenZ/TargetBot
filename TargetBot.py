@@ -1046,6 +1046,22 @@ class YTDLTrack:
         self.requester   = requester
         self.video_id    = data.get("id", "")
         self.source      = data.get("source", "youtube")
+        self.requested_query = data.get("requested_query", "")
+        self.display_title = data.get("display_title", self.title)
+        self.display_artist = data.get("display_artist", self.artist)
+        self.display_thumbnail = data.get("display_thumbnail", self.thumbnail)
+        if self.source == "soundcloud" and not data.get("display_title"):
+            cleaned_query = clean_lyrics_title(self.requested_query or self.title).strip() or self.title
+            display_title = cleaned_query.title() if cleaned_query.islower() else cleaned_query
+            display_artist = "Unknown artist"
+            if " - " in cleaned_query:
+                parts = [part.strip() for part in cleaned_query.split(" - ", 1)]
+                if len(parts) == 2 and parts[0] and parts[1]:
+                    display_artist = parts[0]
+                    display_title = parts[1]
+            self.display_title = display_title
+            self.display_artist = display_artist
+            self.display_thumbnail = ""
 
     @classmethod
     async def fetch(cls, query: str, requester=None) -> "YTDLTrack":
@@ -1063,6 +1079,7 @@ class YTDLTrack:
                 "artist": "Unknown",
                 "webpage_url": f"https://www.youtube.com/watch?v={video_id}",
                 "source": "youtube",
+                "requested_query": query,
             }
         else:
             print(f"[Music][Fetch] Starting lookup flow for query: {query}")
@@ -1079,6 +1096,24 @@ class YTDLTrack:
             meta = results[0]
             video_id = meta["id"]
             print(f"[Music][Fetch] Selected result '{meta.get('title', 'Unknown')}' from source: {meta.get('source', 'youtube')}")
+
+        meta["requested_query"] = query
+        if meta.get("source") == "soundcloud":
+            cleaned_query = clean_lyrics_title(query).strip() or query.strip() or meta.get("title", "Unknown")
+            display_title = cleaned_query.title() if cleaned_query.islower() else cleaned_query
+            display_artist = "Unknown artist"
+            if " - " in cleaned_query:
+                parts = [part.strip() for part in cleaned_query.split(" - ", 1)]
+                if len(parts) == 2 and parts[0] and parts[1]:
+                    display_artist = parts[0]
+                    display_title = parts[1]
+            meta["display_title"] = display_title
+            meta["display_artist"] = display_artist
+            meta["display_thumbnail"] = ""
+        else:
+            meta["display_title"] = meta.get("title", "Unknown")
+            meta["display_artist"] = meta.get("artist") or meta.get("uploader") or "Unknown"
+            meta["display_thumbnail"] = meta.get("thumbnail")
 
         stream_url = meta.get("stream_url", "")
         if not stream_url:
@@ -1139,7 +1174,7 @@ async def _play_next(guild_id: int, text_channel):
         view.message = msg
         music_control_messages[guild_id] = msg
     except Exception as e:
-        await text_channel.send(f"⚠️ Error playing **{track.title}**: `{e}`")
+        await text_channel.send(f"⚠️ Error playing **{getattr(track, 'display_title', track.title)}**: `{e}`")
         music_now[guild_id] = None
         await _play_next(guild_id, text_channel)
 
@@ -1199,9 +1234,9 @@ async def play(ctx, *, query: str):
         await ctx.send(
             embed=discord.Embed(
                 title="➕ Added to Queue",
-                description=f"**{track.title}** — {track.artist}",
+                description=f"**{getattr(track, 'display_title', track.title)}** — {getattr(track, 'display_artist', track.artist)}",
                 color=discord.Color.blurple(),
-            ).set_thumbnail(url=track.thumbnail or "")
+            ).set_thumbnail(url=getattr(track, "display_thumbnail", track.thumbnail) or "")
         )
     else:
         music_now[guild_id] = track
@@ -1268,13 +1303,13 @@ async def queue(ctx):
     if now:
         embed.add_field(
             name="Now Playing",
-            value=f"**{now.title}** — {now.artist}",
+            value=f"**{getattr(now, 'display_title', now.title)}** — {getattr(now, 'display_artist', now.artist)}",
             inline=False,
         )
     for i, t in enumerate(q[:10], 1):
         embed.add_field(
-            name=f"{i}. {t.title[:50]}",
-            value=f"{t.artist} | {format_duration(t.duration)}",
+            name=f"{i}. {getattr(t, 'display_title', t.title)[:50]}",
+            value=f"{getattr(t, 'display_artist', t.artist)} | {format_duration(t.duration)}",
             inline=False,
         )
     if len(q) > 10:
@@ -1324,8 +1359,8 @@ async def search(ctx, *, query: str):
     emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
     for i, t in enumerate(results):
         embed.add_field(
-            name=f"{emojis[i]} {t.title[:50]}",
-            value=f"{t.artist} | {format_duration(t.duration)}",
+            name=f"{emojis[i]} {getattr(t, 'display_title', t.title)[:50]}",
+            value=f"{getattr(t, 'display_artist', t.artist)} | {format_duration(t.duration)}",
             inline=False,
         )
     msg = await ctx.send(embed=embed)
@@ -1679,8 +1714,10 @@ async def lyrics(ctx, *, song_name: str = None):
         result = await fetch_lyrics(song_name)
     elif player and player.current:
         track = player.current
-        await ctx.send(f"🔍 Searching lyrics for: **{track.title}**")
-        result = await fetch_lyrics(track.title, track.author)
+        lyrics_title = getattr(track, "requested_query", None) or getattr(track, "display_title", None) or track.title
+        lyrics_artist = getattr(track, "display_artist", None) or getattr(track, "author", None)
+        await ctx.send(f"🔍 Searching lyrics for: **{lyrics_title}**")
+        result = await fetch_lyrics(lyrics_title, lyrics_artist)
     else:
         return await ctx.send("Nothing is playing. Use `!lyrics <song name>` to search.")
     
@@ -5878,15 +5915,18 @@ def build_music_embed(player, *, paused=False):
     title = "⏸️ Paused" if paused else "🎶 Now Playing"
     embed = discord.Embed(
         title=title,
-        description=f"**{player.title}**",
+        description=f"**{getattr(player, 'display_title', player.title)}**",
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Artist", value=player.artist or "Unknown artist", inline=True)
+    embed.add_field(name="Artist", value=getattr(player, "display_artist", player.artist) or "Unknown artist", inline=True)
     embed.add_field(name="Duration", value=format_duration(getattr(player, "duration", None)), inline=True)
     if getattr(player, "webpage_url", None):
         embed.add_field(name="Source", value=f"[Open track]({player.webpage_url})", inline=False)
-    if getattr(player, "thumbnail", None):
-        embed.set_thumbnail(url=player.thumbnail)
+    display_thumbnail = getattr(player, "display_thumbnail", getattr(player, "thumbnail", None))
+    if display_thumbnail:
+        embed.set_thumbnail(url=display_thumbnail)
+    elif getattr(player, "source", "") == "soundcloud":
+        embed.add_field(name="Audio Source", value="SoundCloud fallback", inline=False)
     autoplay_state = music_autoplay.get(getattr(player, "guild_id", None), False) if hasattr(player, "guild_id") else False
     embed.set_footer(text=f"Pause, stop, skip, or toggle autoplay ({'ON' if autoplay_state else 'OFF'})")
     return embed
