@@ -1418,7 +1418,7 @@ def clean_lyrics_title(text: str) -> str:
     cleaned = re.sub(r"\bfeat\.?\s+[^-|\n]+", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bwith\s+[^-|\n]+", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*[|/]\s*.*$", "", cleaned)
-    cleaned = re.sub(r"\s*[-–—]\s*(?:prod.*|slowed.*|sped up.*|reverb.*|remix.*|edit.*|nightcore.*|bass boosted.*)$", "", flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*[-–—]\s*(?:prod.*|slowed.*|sped up.*|reverb.*|remix.*|edit.*|nightcore.*|bass boosted.*)$", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*[-–—]\s*$", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
     
@@ -6111,3 +6111,4 @@ async def check_blacklist(ctx):
 # =========== TOKEN ==============
 
 bot.run(os.environ.get("TOKEN"))
+
