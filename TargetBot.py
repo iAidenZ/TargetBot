@@ -996,6 +996,60 @@ async def _soundcloud_search(query: str, limit: int = 1) -> list:
     return await loop.run_in_executor(None, _do_search)
 
 
+async def _itunes_metadata_search(query: str) -> dict | None:
+    """Fetch cleaner song metadata for messy fallback sources."""
+    loop = asyncio.get_event_loop()
+    import urllib.request, json as _json
+
+    def _do_search():
+        try:
+            url = f"https://itunes.apple.com/search?term={quote_plus(query)}&entity=song&limit=5"
+            req = urllib.request.Request(url, headers={"User-Agent": "TargetBot/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = _json.loads(r.read())
+        except Exception as e:
+            print(f"[Music][iTunes Metadata] Failed for query '{query}': {e}")
+            return None
+
+        results = data.get("results", [])
+        if not results:
+            print(f"[Music][iTunes Metadata] No metadata results for query: {query}")
+            return None
+
+        cleaned_query = clean_lyrics_title(query).lower()
+        best = None
+        best_score = -1.0
+
+        for item in results:
+            title = item.get("trackName", "")
+            artist = item.get("artistName", "")
+            combined = clean_lyrics_title(f"{artist} {title}").lower()
+            score = SequenceMatcher(None, cleaned_query, combined).ratio()
+            if cleaned_query and cleaned_query in combined:
+                score += 0.25
+            if score > best_score:
+                best_score = score
+                best = item
+
+        if not best:
+            return None
+
+        print(
+            f"[Music][iTunes Metadata] Best match for '{query}': "
+            f"{best.get('artistName', 'Unknown')} - {best.get('trackName', 'Unknown')} "
+            f"(score={best_score:.2f})"
+        )
+        return {
+            "title": best.get("trackName"),
+            "artist": best.get("artistName"),
+            "thumbnail": best.get("artworkUrl100") or best.get("artworkUrl60"),
+            "webpage_url": best.get("trackViewUrl") or best.get("collectionViewUrl") or "",
+            "score": best_score,
+        }
+
+    return await loop.run_in_executor(None, _do_search)
+
+
 async def _piped_stream_url(video_id: str) -> str:
     """Get direct audio stream URL from Piped — no bot detection."""
     loop = asyncio.get_event_loop()
@@ -1110,6 +1164,15 @@ class YTDLTrack:
             meta["display_title"] = display_title
             meta["display_artist"] = display_artist
             meta["display_thumbnail"] = ""
+            enriched = await _itunes_metadata_search(query)
+            if enriched and enriched.get("score", 0) >= 0.45:
+                meta["display_title"] = enriched.get("title") or meta["display_title"]
+                meta["display_artist"] = enriched.get("artist") or meta["display_artist"]
+                meta["display_thumbnail"] = enriched.get("thumbnail") or meta["display_thumbnail"]
+                print(
+                    f"[Music][Fetch] Enriched SoundCloud metadata for '{query}' -> "
+                    f"{meta['display_artist']} - {meta['display_title']}"
+                )
         else:
             meta["display_title"] = meta.get("title", "Unknown")
             meta["display_artist"] = meta.get("artist") or meta.get("uploader") or "Unknown"
