@@ -838,22 +838,84 @@ music_starting  = set()
 recent_play_requests = {}
 
 
-import os as _os
-_COOKIES_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "cookies.txt")
-
 YTDL_OPTS = {
-    "format": "worstaudio/worst",
+    "format": "bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
     "default_search": "ytsearch",
     "source_address": "0.0.0.0",
     "socket_timeout": 15,
-    "cookiefile": _COOKIES_PATH if _os.path.exists(_COOKIES_PATH) else None,
-    "extractor_retries": 5,
-    "fragment_retries": 5,
-    "ignoreerrors": False,
 }
+
+FFMPEG_OPTS = {
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+    "options": "-vn",
+}
+
+# Piped instances — free, no auth, no bot detection
+PIPED_INSTANCES = [
+    "https://pipedapi.kavin.rocks",
+    "https://piped-api.garudalinux.org",
+    "https://api.piped.projectsegfau.lt",
+]
+
+_ytdl = yt_dlp.YoutubeDL(YTDL_OPTS)
+
+
+async def _piped_search(query: str, limit: int = 1) -> list:
+    """Search YouTube via Piped API — no cookies/auth needed."""
+    loop = asyncio.get_event_loop()
+    import urllib.request, json as _json
+
+    def _do_search():
+        for base in PIPED_INSTANCES:
+            try:
+                url = f"{base}/search?q={quote_plus(query)}&filter=videos"
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    data = _json.loads(r.read())
+                items = data.get("items", [])[:limit]
+                return [
+                    {
+                        "id":        i.get("url", "").replace("/watch?v=", ""),
+                        "title":     i.get("title", "Unknown"),
+                        "artist":    i.get("uploaderName", "Unknown"),
+                        "duration":  i.get("duration"),
+                        "thumbnail": i.get("thumbnail"),
+                        "webpage_url": f"https://www.youtube.com{i.get('url','')}",
+                    }
+                    for i in items if i.get("url")
+                ]
+            except Exception:
+                continue
+        return []
+
+    return await loop.run_in_executor(None, _do_search)
+
+
+async def _piped_stream_url(video_id: str) -> str:
+    """Get direct audio stream URL from Piped — no bot detection."""
+    loop = asyncio.get_event_loop()
+    import urllib.request, json as _json
+
+    def _do_fetch():
+        for base in PIPED_INSTANCES:
+            try:
+                url = f"{base}/streams/{video_id}"
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    data = _json.loads(r.read())
+                streams = data.get("audioStreams", [])
+                if streams:
+                    # Pick highest quality audio stream
+                    best = max(streams, key=lambda s: s.get("bitrate", 0))
+                    return best.get("url", "")
+            except Exception:
+                continue
+        return ""
+
+    return await loop.run_in_executor(None, _do_fetch)
 
 FFMPEG_OPTS = {
     "before_options": (
@@ -866,48 +928,49 @@ _ytdl = yt_dlp.YoutubeDL(YTDL_OPTS)
 
 
 class YTDLTrack:
-    """Represents a single playable track fetched via yt-dlp."""
-    def __init__(self, data, requester=None):
+    """Represents a single playable track fetched via Piped API."""
+    def __init__(self, data, stream_url="", requester=None):
         self.title       = data.get("title", "Unknown")
-        self.stream_url  = data.get("url", "")
+        self.stream_url  = stream_url
         self.webpage_url = data.get("webpage_url", "")
         self.thumbnail   = data.get("thumbnail")
         self.duration    = data.get("duration")
-        self.artist      = data.get("uploader") or data.get("channel") or "Unknown"
+        self.artist      = data.get("artist") or data.get("uploader") or "Unknown"
         self.requester   = requester
+        self.video_id    = data.get("id", "")
 
     @classmethod
     async def fetch(cls, query: str, requester=None) -> "YTDLTrack":
-        loop = asyncio.get_event_loop()
-        if not query.startswith("http"):
-            query = f"ytsearch:{query}"
+        # If it's a direct YouTube URL, extract video ID
+        import re as _re
+        yt_match = _re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", query)
 
-        def _extract():
-            # Try with format preference first, fall back to any available
-            for fmt in ["bestaudio/best", "best"]:
-                try:
-                    opts = {**YTDL_OPTS, "format": fmt}
-                    with yt_dlp.YoutubeDL(opts) as ydl:
-                        data = ydl.extract_info(query, download=False)
-                        if "entries" in data:
-                            data = data["entries"][0]
-                        if data.get("url"):
-                            return data
-                except Exception:
-                    continue
-            raise Exception("No playable format found for this track.")
+        if yt_match:
+            video_id = yt_match.group(1)
+            # Build basic metadata from ID
+            meta = {
+                "id": video_id,
+                "title": "YouTube Video",
+                "artist": "Unknown",
+                "webpage_url": f"https://www.youtube.com/watch?v={video_id}",
+            }
+        else:
+            results = await _piped_search(query, limit=1)
+            if not results:
+                raise Exception("No results found.")
+            meta = results[0]
+            video_id = meta["id"]
 
-        data = await loop.run_in_executor(None, _extract)
-        return cls(data, requester=requester)
+        stream_url = await _piped_stream_url(video_id)
+        if not stream_url:
+            raise Exception("Could not get audio stream. Try another song.")
+
+        return cls(meta, stream_url=stream_url, requester=requester)
 
     @classmethod
     async def search_many(cls, query: str, limit: int = 5, requester=None):
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(
-            None,
-            lambda: _ytdl.extract_info(f"ytsearch{limit}:{query}", download=False),
-        )
-        return [cls(e, requester=requester) for e in (data.get("entries") or [])[:limit]]
+        results = await _piped_search(query, limit=limit)
+        return [cls(r, requester=requester) for r in results]
 
 
 def _make_source(track: YTDLTrack):
@@ -957,10 +1020,7 @@ async def _play_next(guild_id: int, text_channel):
 @bot.event
 async def on_ready():
     load_data()
-    if _os.path.exists(_COOKIES_PATH):
-        print(f"[Music] ✅ cookies.txt found at {_COOKIES_PATH}")
-    else:
-        print(f"[Music] ⚠️ cookies.txt NOT found at {_COOKIES_PATH} — YouTube may block requests")
+    print(f"[Music] Using Piped API for YouTube streaming (no auth needed)")
     print(f"Logged in as {bot.user}")
 
 
