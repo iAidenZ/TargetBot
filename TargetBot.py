@@ -871,11 +871,13 @@ async def _piped_search(query: str, limit: int = 1) -> list:
     def _do_search():
         for base in PIPED_INSTANCES:
             try:
+                print(f"[Music][Piped Search] Trying {base} for query: {query}")
                 url = f"{base}/search?q={quote_plus(query)}&filter=videos"
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
                 with urllib.request.urlopen(req, timeout=8) as r:
                     data = _json.loads(r.read())
                 items = data.get("items", [])[:limit]
+                print(f"[Music][Piped Search] {base} returned {len(items)} item(s) for query: {query}")
                 return [
                     {
                         "id":        i.get("url", "").replace("/watch?v=", ""),
@@ -887,8 +889,10 @@ async def _piped_search(query: str, limit: int = 1) -> list:
                     }
                     for i in items if i.get("url")
                 ]
-            except Exception:
+            except Exception as e:
+                print(f"[Music][Piped Search] {base} failed for query '{query}': {e}")
                 continue
+        print(f"[Music][Piped Search] All instances failed or returned no results for query: {query}")
         return []
 
     return await loop.run_in_executor(None, _do_search)
@@ -904,8 +908,10 @@ async def _yt_dlp_search(query: str, limit: int = 1) -> list:
             search_term = f"ytsearch{limit}:{query}"
 
         try:
+            print(f"[Music][yt-dlp Search] Trying search term: {search_term}")
             data = _ytdl.extract_info(search_term, download=False)
-        except Exception:
+        except Exception as e:
+            print(f"[Music][yt-dlp Search] Failed for '{search_term}': {e}")
             return []
 
         entries = data.get("entries") if isinstance(data, dict) else None
@@ -928,6 +934,7 @@ async def _yt_dlp_search(query: str, limit: int = 1) -> list:
                         "webpage_url": webpage_url,
                     }
                 )
+            print(f"[Music][yt-dlp Search] Found {len(results)} result(s) for '{search_term}'")
             return results
 
         if isinstance(data, dict):
@@ -944,6 +951,7 @@ async def _yt_dlp_search(query: str, limit: int = 1) -> list:
                 "webpage_url": webpage_url,
             }]
 
+        print(f"[Music][yt-dlp Search] No usable results for '{search_term}'")
         return []
 
     return await loop.run_in_executor(None, _do_search)
@@ -955,12 +963,15 @@ async def _soundcloud_search(query: str, limit: int = 1) -> list:
 
     def _do_search():
         try:
+            print(f"[Music][SoundCloud Search] Trying scsearch{limit}:{query}")
             data = _ytdl.extract_info(f"scsearch{limit}:{query}", download=False)
-        except Exception:
+        except Exception as e:
+            print(f"[Music][SoundCloud Search] Failed for query '{query}': {e}")
             return []
 
         entries = data.get("entries") if isinstance(data, dict) else None
         if not entries:
+            print(f"[Music][SoundCloud Search] No entries for query: {query}")
             return []
 
         results = []
@@ -979,6 +990,7 @@ async def _soundcloud_search(query: str, limit: int = 1) -> list:
                     "source": "soundcloud",
                 }
             )
+        print(f"[Music][SoundCloud Search] Found {len(results)} result(s) for query: {query}")
         return results
 
     return await loop.run_in_executor(None, _do_search)
@@ -992,6 +1004,7 @@ async def _piped_stream_url(video_id: str) -> str:
     def _do_fetch():
         for base in PIPED_INSTANCES:
             try:
+                print(f"[Music][Piped Stream] Trying {base} for video ID: {video_id}")
                 url = f"{base}/streams/{video_id}"
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
                 with urllib.request.urlopen(req, timeout=10) as r:
@@ -1000,9 +1013,13 @@ async def _piped_stream_url(video_id: str) -> str:
                 if streams:
                     # Pick highest quality audio stream
                     best = max(streams, key=lambda s: s.get("bitrate", 0))
+                    print(f"[Music][Piped Stream] {base} returned audio stream for video ID: {video_id}")
                     return best.get("url", "")
-            except Exception:
+                print(f"[Music][Piped Stream] {base} returned no audio streams for video ID: {video_id}")
+            except Exception as e:
+                print(f"[Music][Piped Stream] {base} failed for video ID '{video_id}': {e}")
                 continue
+        print(f"[Music][Piped Stream] All instances failed for video ID: {video_id}")
         return ""
 
     return await loop.run_in_executor(None, _do_fetch)
@@ -1037,6 +1054,7 @@ class YTDLTrack:
         yt_match = _re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", query)
 
         if yt_match:
+            print(f"[Music][Fetch] Direct YouTube URL detected for query: {query}")
             video_id = yt_match.group(1)
             # Build basic metadata from ID
             meta = {
@@ -1047,22 +1065,30 @@ class YTDLTrack:
                 "source": "youtube",
             }
         else:
+            print(f"[Music][Fetch] Starting lookup flow for query: {query}")
             results = await _piped_search(query, limit=1)
             if not results:
+                print(f"[Music][Fetch] Piped search failed for query: {query}, trying SoundCloud fallback")
                 results = await _soundcloud_search(query, limit=1)
             if not results:
+                print(f"[Music][Fetch] SoundCloud fallback failed for query: {query}, trying yt-dlp fallback")
                 results = await _yt_dlp_search(query, limit=1)
             if not results:
+                print(f"[Music][Fetch] All search backends failed for query: {query}")
                 raise Exception("No results found. YouTube search is blocked on Railway right now, so try a SoundCloud link or use !search.")
             meta = results[0]
             video_id = meta["id"]
+            print(f"[Music][Fetch] Selected result '{meta.get('title', 'Unknown')}' from source: {meta.get('source', 'youtube')}")
 
         stream_url = meta.get("stream_url", "")
         if not stream_url:
+            print(f"[Music][Fetch] No direct stream URL on metadata, trying Piped stream lookup for video ID: {video_id}")
             stream_url = await _piped_stream_url(video_id)
         if not stream_url:
+            print(f"[Music][Fetch] Failed to get audio stream for query: {query}")
             raise Exception("Could not get audio stream. Try another song or a SoundCloud link.")
 
+        print(f"[Music][Fetch] Stream ready for query: {query}")
         return cls(meta, stream_url=stream_url, requester=requester)
 
     @classmethod
