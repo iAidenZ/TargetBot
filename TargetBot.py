@@ -894,6 +894,61 @@ async def _piped_search(query: str, limit: int = 1) -> list:
     return await loop.run_in_executor(None, _do_search)
 
 
+async def _yt_dlp_search(query: str, limit: int = 1) -> list:
+    """Fallback search via yt-dlp when public Piped instances fail."""
+    loop = asyncio.get_event_loop()
+
+    def _do_search():
+        search_term = query
+        if not any(token in query for token in ("http://", "https://", "ytsearch", "scsearch")):
+            search_term = f"ytsearch{limit}:{query}"
+
+        try:
+            data = _ytdl.extract_info(search_term, download=False)
+        except Exception:
+            return []
+
+        entries = data.get("entries") if isinstance(data, dict) else None
+        if entries:
+            results = []
+            for item in entries[:limit]:
+                if not item:
+                    continue
+                video_id = item.get("id", "")
+                webpage_url = item.get("webpage_url") or (
+                    f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+                )
+                results.append(
+                    {
+                        "id": video_id,
+                        "title": item.get("title", "Unknown"),
+                        "artist": item.get("uploader") or item.get("channel") or "Unknown",
+                        "duration": item.get("duration"),
+                        "thumbnail": item.get("thumbnail"),
+                        "webpage_url": webpage_url,
+                    }
+                )
+            return results
+
+        if isinstance(data, dict):
+            video_id = data.get("id", "")
+            webpage_url = data.get("webpage_url") or (
+                f"https://www.youtube.com/watch?v={video_id}" if video_id else query
+            )
+            return [{
+                "id": video_id,
+                "title": data.get("title", "Unknown"),
+                "artist": data.get("uploader") or data.get("channel") or "Unknown",
+                "duration": data.get("duration"),
+                "thumbnail": data.get("thumbnail"),
+                "webpage_url": webpage_url,
+            }]
+
+        return []
+
+    return await loop.run_in_executor(None, _do_search)
+
+
 async def _piped_stream_url(video_id: str) -> str:
     """Get direct audio stream URL from Piped — no bot detection."""
     loop = asyncio.get_event_loop()
@@ -957,6 +1012,8 @@ class YTDLTrack:
         else:
             results = await _piped_search(query, limit=1)
             if not results:
+                results = await _yt_dlp_search(query, limit=1)
+            if not results:
                 raise Exception("No results found.")
             meta = results[0]
             video_id = meta["id"]
@@ -970,6 +1027,8 @@ class YTDLTrack:
     @classmethod
     async def search_many(cls, query: str, limit: int = 5, requester=None):
         results = await _piped_search(query, limit=limit)
+        if not results:
+            results = await _yt_dlp_search(query, limit=limit)
         return [cls(r, requester=requester) for r in results]
 
 
